@@ -2,7 +2,6 @@ use crate::models::unigram::{lattice::Lattice, model::Unigram};
 use crate::tokenizer::{AddedToken, Result, Trainer};
 use crate::utils::parallelism::*;
 use crate::utils::progress::{ProgressBar, ProgressStyle};
-use log::debug;
 use serde::{Deserialize, Serialize};
 use std::cmp::Reverse;
 use std::collections::{HashMap, HashSet};
@@ -59,7 +58,8 @@ pub struct UnigramTrainer {
     pub special_tokens: Vec<AddedToken>,
     #[builder(default = "HashSet::new()")]
     pub initial_alphabet: HashSet<char>,
-
+    #[builder(default = "None")]
+    pub seed_vocab: Option<Vec<String>>,
     #[builder(default = "None")]
     pub unk_token: Option<String>,
 
@@ -510,6 +510,10 @@ impl UnigramTrainer {
                 continue;
             }
             if *freq < expected_frequency_threshold {
+                if self.seed_vocab.is_some() {
+                    new_pieces.push((piece.clone(), 1.0));
+                    sum += 1.0;
+                }
                 continue;
             }
             new_pieces.push((piece.clone(), *freq));
@@ -541,11 +545,24 @@ impl UnigramTrainer {
 
         // We use a UNK token when training, whatever the `self.unk_token`
         pieces.push(("<UNK>".into(), f64::NAN));
-        pieces.extend(self.make_seed_sentence_pieces(&sentences, &progress));
+
+        let seed_sentencepieces = self.make_seed_sentence_pieces(&sentences, &progress);
+
+        if let Some(seed_vocab) = &self.seed_vocab {
+            let seed_sentencepieces_map: HashMap<_, _> = seed_sentencepieces
+                .iter()
+                .map(|(s, score)| (s.as_str(), score))
+                .collect();
+
+            let seed_sentencepieces: Vec<_> = seed_vocab.clone().into_iter().map(|s| (s.clone(), **seed_sentencepieces_map.get(s.as_str()).unwrap_or(&&0.0))).collect();
+            pieces.extend(seed_sentencepieces);
+        } else {
+            pieces.extend(seed_sentencepieces);            
+        }
         self.finalize_progress(&progress, sentences.len());
 
         // Useful to check compatibility with spm.
-        debug!(
+        println!(
             "Using {} pieces on {} sentences for EM training",
             pieces.len(),
             sentences.len()
@@ -567,6 +584,10 @@ impl UnigramTrainer {
         if required_chars.len() as u32 > self.vocab_size {
             return Err(Box::new(UnigramTrainerError::VocabularyTooSmall));
         }
+
+        println!("Expected Loops: {}", expected_loops);
+        println!("Desired Vocab Size: {}", desired_vocab_size);
+
         let mut new_model = Unigram::from(pieces.clone(), Some(0), false)?;
         loop {
             // Sub-EM iteration.
@@ -579,7 +600,7 @@ impl UnigramTrainer {
                 new_model = Unigram::from(pieces.clone(), Some(0), false)?;
 
                 // Useful comment for checking compatibility with spm
-                debug!(
+                println!(
                     "Em iter={} size={} obj={} num_tokens={} num_tokens/piece={}",
                     _iter,
                     new_model.len(),

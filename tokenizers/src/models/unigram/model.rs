@@ -157,6 +157,17 @@ impl Unigram {
         self.vocab.len()
     }
 
+    pub fn set_scores(&mut self, scores: Vec<f64>) {
+        for (i, score) in scores.into_iter().enumerate() {
+            self.vocab[i].1 = score;
+        }
+        self.cache = self.cache.fresh();
+    }
+
+    pub fn get_scores(&self) -> Vec<f64> {
+        self.vocab.iter().map(|(_, score)| *score).collect()
+    }
+
     pub(super) fn populate_nodes(&self, lattice: &mut Lattice) {
         let unk_score = self.min_score - K_UNK_PENALTY;
 

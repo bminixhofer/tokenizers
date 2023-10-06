@@ -833,6 +833,24 @@ impl PyUnigram {
             )),
         }
     }
+
+    #[pyo3(text_signature = "(self, scores)")]
+    fn set_scores(self_: PyRef<Self>, scores: Vec<f64>) {
+        let mut model: std::sync::RwLockWriteGuard<'_, ModelWrapper> = self_.as_ref().model.write().unwrap();
+        if let ModelWrapper::Unigram(ref mut unigram) = *model {
+            unigram.set_scores(scores);
+        }
+    }
+
+    #[pyo3(text_signature = "(self)")]
+    fn get_scores(self_: PyRef<Self>) -> PyResult<Vec<f64>> {
+        let model: std::sync::RwLockReadGuard<'_, ModelWrapper> = self_.as_ref().model.read().unwrap();
+        if let ModelWrapper::Unigram(ref unigram) = *model {
+            Ok(unigram.get_scores())
+        } else {
+            unreachable!()
+        }
+    }
 }
 
 /// Models Module

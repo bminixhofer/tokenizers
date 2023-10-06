@@ -828,6 +828,7 @@ impl PyUnigramTrainer {
                     "unk_token" => builder.unk_token(val.extract()?),
                     "max_piece_length" => builder.max_piece_length(val.extract()?),
                     "seed_size" => builder.seed_size(val.extract()?),
+                    "seed_vocab" => builder.seed_vocab(val.extract()?),
                     "initial_alphabet" => {
                         let alphabet: Vec<String> = val.extract()?;
                         builder.initial_alphabet(
