@@ -842,6 +842,14 @@ impl PyUnigram {
         }
     }
 
+    #[pyo3(text_signature = "(self, vocab)")]
+    fn set_vocab(self_: PyRef<Self>, vocab: HashMap<String, u32>) {
+        let mut model: std::sync::RwLockWriteGuard<'_, ModelWrapper> = self_.as_ref().model.write().unwrap();
+        if let ModelWrapper::Unigram(ref mut unigram) = *model {
+            unigram.set_vocab(vocab);
+        }
+    }
+
     #[pyo3(text_signature = "(self)")]
     fn get_scores(self_: PyRef<Self>) -> PyResult<Vec<f64>> {
         let model: std::sync::RwLockReadGuard<'_, ModelWrapper> = self_.as_ref().model.read().unwrap();

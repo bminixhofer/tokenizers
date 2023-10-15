@@ -157,6 +157,13 @@ impl Unigram {
         self.vocab.len()
     }
 
+    pub fn set_vocab(&mut self, vocab: HashMap<String, u32>) {
+        self.vocab.sort_by_key(|x| vocab.get(&x.0).unwrap());
+        self.token_to_ids = vocab;
+
+        self.cache = self.cache.fresh();
+    }
+
     pub fn set_scores(&mut self, scores: Vec<f64>) {
         for (i, score) in scores.into_iter().enumerate() {
             self.vocab[i].1 = score;
