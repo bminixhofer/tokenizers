@@ -164,6 +164,14 @@ impl Unigram {
         self.cache = self.cache.fresh();
     }
 
+    pub fn set_pieces(&mut self, pieces: Vec<(String, f64)>) {
+        self.vocab = pieces;
+    }
+
+    pub fn get_pieces(&self) -> Vec<(String, f64)> {
+        self.vocab.clone()
+    }
+
     pub fn set_scores(&mut self, scores: Vec<f64>) {
         for (i, score) in scores.into_iter().enumerate() {
             self.vocab[i].1 = score;
@@ -173,6 +181,16 @@ impl Unigram {
 
     pub fn get_scores(&self) -> Vec<f64> {
         self.vocab.iter().map(|(_, score)| *score).collect()
+    }
+
+    pub fn update_trie(&mut self) {
+        let mut builder = TrieBuilder::default();
+
+        for (token, _) in self.vocab.iter() {
+            let bytes: Vec<u8> = token.bytes().collect();
+            builder.push(&bytes);
+        }
+        self.trie = builder.build();
     }
 
     pub(super) fn populate_nodes(&self, lattice: &mut Lattice) {
@@ -251,6 +269,12 @@ impl Unigram {
             self.cache.set(sentence.to_owned(), result.clone());
             Ok(result)
         }
+    }
+
+    pub fn get_all_encodings(&self, sentence: &str) -> Vec<Vec<String>> {
+        let mut lattice = Lattice::from(sentence, self.bos_id, self.eos_id);
+        self.populate_nodes(&mut lattice);
+        lattice.nbest_tokens(usize::MAX)
     }
 
     fn encode_optimized(&self, sentence: &str) -> Result<Vec<String>> {
