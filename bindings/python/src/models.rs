@@ -834,11 +834,31 @@ impl PyUnigram {
         }
     }
 
-    #[pyo3(text_signature = "(self, scores)")]
-    fn set_scores(self_: PyRef<Self>, scores: Vec<f64>) {
+    #[pyo3(text_signature = "(self, pieces)")]
+    fn get_all_encodings(self_: PyRef<Self>, sentence: &str) -> PyResult<Vec<Vec<String>>> {
+        let model: std::sync::RwLockReadGuard<'_, ModelWrapper> = self_.as_ref().model.read().unwrap();
+        if let ModelWrapper::Unigram(ref unigram) = *model {
+            Ok(unigram.get_all_encodings(sentence))
+        } else {
+            unreachable!()
+        }
+    }
+
+    #[pyo3(text_signature = "(self, pieces)")]
+    fn set_pieces(self_: PyRef<Self>, pieces: Vec<(String, f64)>) {
         let mut model: std::sync::RwLockWriteGuard<'_, ModelWrapper> = self_.as_ref().model.write().unwrap();
         if let ModelWrapper::Unigram(ref mut unigram) = *model {
-            unigram.set_scores(scores);
+            unigram.set_pieces(pieces);
+        }
+    }
+
+    #[pyo3(text_signature = "(self, pieces)")]
+    fn get_pieces(self_: PyRef<Self>) -> PyResult<Vec<(String, f64)>> {
+        let model: std::sync::RwLockReadGuard<'_, ModelWrapper> = self_.as_ref().model.read().unwrap();
+        if let ModelWrapper::Unigram(ref unigram) = *model {
+            Ok(unigram.get_pieces())
+        } else {
+            unreachable!()
         }
     }
 
@@ -850,6 +870,14 @@ impl PyUnigram {
         }
     }
 
+    #[pyo3(text_signature = "(self, scores)")]
+    fn set_scores(self_: PyRef<Self>, scores: Vec<f64>) {
+        let mut model: std::sync::RwLockWriteGuard<'_, ModelWrapper> = self_.as_ref().model.write().unwrap();
+        if let ModelWrapper::Unigram(ref mut unigram) = *model {
+            unigram.set_scores(scores);
+        }
+    }
+
     #[pyo3(text_signature = "(self)")]
     fn get_scores(self_: PyRef<Self>) -> PyResult<Vec<f64>> {
         let model: std::sync::RwLockReadGuard<'_, ModelWrapper> = self_.as_ref().model.read().unwrap();
@@ -857,6 +885,14 @@ impl PyUnigram {
             Ok(unigram.get_scores())
         } else {
             unreachable!()
+        }
+    }
+
+    #[pyo3(text_signature = "(self)")]
+    fn update_trie(self_: PyRef<Self>) {
+        let mut model: std::sync::RwLockWriteGuard<'_, ModelWrapper> = self_.as_ref().model.write().unwrap();
+        if let ModelWrapper::Unigram(ref mut unigram) = *model {
+            unigram.update_trie();
         }
     }
 }
