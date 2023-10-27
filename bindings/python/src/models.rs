@@ -895,6 +895,14 @@ impl PyUnigram {
             unigram.update_trie();
         }
     }
+
+    #[pyo3(text_signature = "(self, subsample_size, temperature)")]
+    fn subsample(self_: PyRef<Self>, subsample_size: usize, temperature: f64) {
+        let mut model: std::sync::RwLockWriteGuard<'_, ModelWrapper> = self_.as_ref().model.write().unwrap();
+        if let ModelWrapper::Unigram(ref mut unigram) = *model {
+            unigram.subsample(subsample_size, temperature);
+        }
+    }
 }
 
 /// Models Module

@@ -1,3 +1,5 @@
+use rand::seq::SliceRandom;
+
 use super::{
     lattice::Lattice,
     trainer::UnigramTrainer,
@@ -17,6 +19,7 @@ type Vocab = Vec<(String, f64)>;
 /// A `Unigram` model to encode sentences.
 pub struct Unigram {
     token_to_ids: TokenMap,
+    original_vocab: Vocab,
     pub(crate) vocab: Vocab,
     cache: Cache<String, Vec<String>>,
     trie: Trie<u8>,
@@ -52,6 +55,7 @@ impl Clone for Unigram {
             fuse_unk: self.fuse_unk,
             is_optimized: self.is_optimized,
             byte_fallback: self.byte_fallback,
+            original_vocab: self.original_vocab.clone(),
         }
     }
 }
@@ -126,7 +130,7 @@ impl Unigram {
         let is_optimized = true;
 
         Ok(Self {
-            vocab,
+            vocab: vocab.clone(),
             token_to_ids,
             trie,
             min_score,
@@ -137,6 +141,7 @@ impl Unigram {
             cache: Cache::default(),
             is_optimized,
             byte_fallback,
+            original_vocab: vocab,
         })
     }
 
@@ -155,6 +160,24 @@ impl Unigram {
     }
     pub(super) fn len(&self) -> usize {
         self.vocab.len()
+    }
+
+    pub fn subsample(&mut self, subsample_size: usize, temperature: f64) {
+        let mut rng = rand::thread_rng();
+
+        // sampling is wrong (samples low prob. too much) without the large multiplier
+        // maybe f64 imprecisions?
+        self.vocab = self.original_vocab[..].choose_multiple_weighted(&mut rng, subsample_size - 1, |piece| (piece.1 / temperature).exp() * 10000.0).unwrap().cloned().collect();
+        self.vocab.insert(0, ("<|endoftext|>".to_string(), 0.0));
+        self.unk_id = Some(0);
+
+        self.cache = self.cache.fresh();
+        self.update_trie();
+
+        self.token_to_ids = HashMap::new();
+        for (id, (token, _)) in self.vocab.iter().enumerate() {
+            self.token_to_ids.insert(token.to_string(), id as u32);
+        }
     }
 
     pub fn set_vocab(&mut self, vocab: HashMap<String, u32>) {
