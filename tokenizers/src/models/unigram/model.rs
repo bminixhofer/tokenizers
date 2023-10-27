@@ -19,7 +19,6 @@ type Vocab = Vec<(String, f64)>;
 /// A `Unigram` model to encode sentences.
 pub struct Unigram {
     token_to_ids: TokenMap,
-    original_vocab: Vocab,
     pub(crate) vocab: Vocab,
     cache: Cache<String, Vec<String>>,
     trie: Trie<u8>,
@@ -31,6 +30,9 @@ pub struct Unigram {
     fuse_unk: bool,
     is_optimized: bool,
     byte_fallback: bool,
+
+    original_vocab: Vocab,
+    original_indices: Vec<usize>
 }
 impl PartialEq for Unigram {
     fn eq(&self, other: &Self) -> bool {
@@ -56,6 +58,7 @@ impl Clone for Unigram {
             is_optimized: self.is_optimized,
             byte_fallback: self.byte_fallback,
             original_vocab: self.original_vocab.clone(),
+            original_indices: self.original_indices.clone()
         }
     }
 }
@@ -141,6 +144,8 @@ impl Unigram {
             cache: Cache::default(),
             is_optimized,
             byte_fallback,
+
+            original_indices: (0..vocab.len()).collect(),
             original_vocab: vocab,
         })
     }
@@ -165,11 +170,28 @@ impl Unigram {
     pub fn subsample(&mut self, subsample_size: usize, temperature: f64) {
         let mut rng = rand::thread_rng();
 
+        let eot_index = self.token_to_id("<|endoftext|>").unwrap() as usize;
+
         // sampling is wrong (samples low prob. too much) without the large multiplier
         // maybe f64 imprecisions?
-        self.vocab = self.original_vocab[..].choose_multiple_weighted(&mut rng, subsample_size - 1, |piece| (piece.1 / temperature).exp() * 10000.0).unwrap().cloned().collect();
-        self.vocab.insert(0, ("<|endoftext|>".to_string(), 0.0));
-        self.unk_id = Some(0);
+        let pieces_with_indices: Vec<_> = self.original_vocab.iter().enumerate().collect();
+
+        let sampled: Vec<_> = pieces_with_indices.choose_multiple_weighted(&mut rng, subsample_size, |piece| (piece.1.1 / temperature).exp() * 10000.0).unwrap().cloned().collect();
+        
+        self.original_indices = sampled.iter().map(|(i, _)| *i).collect::<Vec<_>>();
+        self.vocab = sampled.into_iter().map(|(_, p)| p.clone()).collect::<Vec<_>>();
+
+        let new_eot_index = self.original_indices.iter().position(|i| *i == eot_index);
+        let new_eot_index = if new_eot_index.is_none() {
+            self.vocab.insert(0, ("<|endoftext|>".to_string(), 0.0));
+            self.vocab.pop();
+            self.original_indices.insert(0, eot_index);
+            self.original_indices.pop();
+            0
+        } else {
+            new_eot_index.unwrap()
+        };
+        self.unk_id = Some(new_eot_index);
 
         self.cache = self.cache.fresh();
         self.update_trie();
@@ -178,6 +200,10 @@ impl Unigram {
         for (id, (token, _)) in self.vocab.iter().enumerate() {
             self.token_to_ids.insert(token.to_string(), id as u32);
         }
+    }
+
+    pub fn get_original_indices(&self) -> Vec<usize> {
+        self.original_indices.clone()
     }
 
     pub fn set_vocab(&mut self, vocab: HashMap<String, u32>) {

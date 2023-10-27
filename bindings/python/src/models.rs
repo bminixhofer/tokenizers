@@ -903,6 +903,16 @@ impl PyUnigram {
             unigram.subsample(subsample_size, temperature);
         }
     }
+
+    #[pyo3(text_signature = "(self)")]
+    fn get_original_indices(self_: PyRef<Self>) -> PyResult<Vec<usize>> {
+        let model: std::sync::RwLockReadGuard<'_, ModelWrapper> = self_.as_ref().model.read().unwrap();
+        if let ModelWrapper::Unigram(ref unigram) = *model {
+            Ok(unigram.get_original_indices())
+        } else {
+            unreachable!()
+        }
+    }
 }
 
 /// Models Module
