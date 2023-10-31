@@ -170,14 +170,13 @@ impl Unigram {
     pub fn subsample(&mut self, subsample_size: usize, temperature: f64) {
         let mut rng = rand::thread_rng();
 
-        let eot_index = self.token_to_id("<|endoftext|>").unwrap() as usize;
+        let pieces_with_indices: Vec<_> = self.original_vocab.iter().enumerate().collect();
+        let eot_index = pieces_with_indices.iter().position(|piece| piece.1.0 == "<|endoftext|>").unwrap();
 
         // sampling is wrong (samples low prob. too much) without the large multiplier
         // maybe f64 imprecisions?
-        let pieces_with_indices: Vec<_> = self.original_vocab.iter().enumerate().collect();
-
         let sampled: Vec<_> = pieces_with_indices.choose_multiple_weighted(&mut rng, subsample_size, |piece| (piece.1.1 / temperature).exp() * 10000.0).unwrap().cloned().collect();
-        
+
         self.original_indices = sampled.iter().map(|(i, _)| *i).collect::<Vec<_>>();
         self.vocab = sampled.into_iter().map(|(_, p)| p.clone()).collect::<Vec<_>>();
 
