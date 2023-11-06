@@ -1,3 +1,4 @@
+use itertools::Itertools;
 use rand::seq::SliceRandom;
 
 use super::{
@@ -8,7 +9,7 @@ use super::{
 use crate::tokenizer::{Model, Result, Token};
 use crate::utils::cache::Cache;
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::convert::TryInto;
 use std::fs::read_to_string;
 use std::path::{Path, PathBuf};
@@ -167,30 +168,28 @@ impl Unigram {
         self.vocab.len()
     }
 
-    pub fn subsample(&mut self, subsample_size: usize, temperature: f64) {
+    pub fn subsample(&mut self, subsample_size: usize, temperature: f64, ignore_pieces: Vec<String>, add_pieces: Vec<String>, add_pieces_ids: Vec<usize>) {
         let mut rng = rand::thread_rng();
 
-        let pieces_with_indices: Vec<_> = self.original_vocab.iter().enumerate().collect();
-        let eot_index = pieces_with_indices.iter().position(|piece| piece.1.0 == "<|endoftext|>").unwrap();
+        let ignore_pieces: HashSet<_> = ignore_pieces.into_iter().chain(add_pieces.clone().into_iter()).collect();
+        let pieces_with_indices: Vec<_> = self.original_vocab.iter().filter(|x| !ignore_pieces.contains(&x.0)).enumerate().collect();
+        let piece_to_original_index: HashMap<_, _> = pieces_with_indices.iter().map(|(i, (p, _))| (p, *i)).collect();
 
         // sampling is wrong (samples low prob. too much) without the large multiplier
         // maybe f64 imprecisions?
-        let sampled: Vec<_> = pieces_with_indices.choose_multiple_weighted(&mut rng, subsample_size, |piece| (piece.1.1 / temperature).exp() * 10000.0).unwrap().cloned().collect();
+        let sampled: Vec<_> = pieces_with_indices.choose_multiple_weighted(&mut rng, subsample_size - add_pieces.len(), |piece| (piece.1.1 / temperature).exp() * 10000.0).unwrap().cloned().collect();
 
         self.original_indices = sampled.iter().map(|(i, _)| *i).collect::<Vec<_>>();
         self.vocab = sampled.into_iter().map(|(_, p)| p.clone()).collect::<Vec<_>>();
 
-        let new_eot_index = self.original_indices.iter().position(|i| *i == eot_index);
-        let new_eot_index = if new_eot_index.is_none() {
-            self.vocab.insert(0, ("<|endoftext|>".to_string(), 0.0));
-            self.vocab.pop();
-            self.original_indices.insert(0, eot_index);
-            self.original_indices.pop();
-            0
-        } else {
-            new_eot_index.unwrap()
-        };
-        self.unk_id = Some(new_eot_index);
+        for (piece, index) in add_pieces.iter().zip(add_pieces_ids.iter()).sorted_by_key(|x| x.1) {
+            self.vocab.insert(*index, (piece.clone(), 0.0));
+            self.original_indices.insert(0, piece_to_original_index.get(piece).cloned().unwrap_or(usize::MAX));
+        }
+
+        // TODO: this is problematic :|
+        // may be fine as implicit convention?
+        self.unk_id = Some(0);
 
         self.cache = self.cache.fresh();
         self.update_trie();

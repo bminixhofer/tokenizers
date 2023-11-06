@@ -896,11 +896,11 @@ impl PyUnigram {
         }
     }
 
-    #[pyo3(text_signature = "(self, subsample_size, temperature)")]
-    fn subsample(self_: PyRef<Self>, subsample_size: usize, temperature: f64) {
+    #[pyo3(text_signature = "(self, subsample_size, temperature, ignore_pieces, add_pieces, add_pieces_ids)")]
+    fn subsample(self_: PyRef<Self>, subsample_size: usize, temperature: f64, ignore_pieces: Option<Vec<String>>, add_pieces: Option<Vec<String>>, add_pieces_ids: Option<Vec<usize>>) {
         let mut model: std::sync::RwLockWriteGuard<'_, ModelWrapper> = self_.as_ref().model.write().unwrap();
         if let ModelWrapper::Unigram(ref mut unigram) = *model {
-            unigram.subsample(subsample_size, temperature);
+            unigram.subsample(subsample_size, temperature, ignore_pieces.unwrap_or(Vec::new()), add_pieces.unwrap_or(Vec::new()), add_pieces_ids.unwrap_or(Vec::new()));
         }
     }
 
