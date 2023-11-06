@@ -172,12 +172,13 @@ impl Unigram {
         let mut rng = rand::thread_rng();
 
         let ignore_pieces: HashSet<_> = ignore_pieces.into_iter().chain(add_pieces.clone().into_iter()).collect();
-        let pieces_with_indices: Vec<_> = self.original_vocab.iter().filter(|x| !ignore_pieces.contains(&x.0)).enumerate().collect();
+        let pieces_with_indices: Vec<_> = self.original_vocab.iter().enumerate().collect();
         let piece_to_original_index: HashMap<_, _> = pieces_with_indices.iter().map(|(i, (p, _))| (p, *i)).collect();
 
         // sampling is wrong (samples low prob. too much) without the large multiplier
         // maybe f64 imprecisions?
-        let sampled: Vec<_> = pieces_with_indices.choose_multiple_weighted(&mut rng, subsample_size - add_pieces.len(), |piece| (piece.1.1 / temperature).exp() * 10000.0).unwrap().cloned().collect();
+        let to_sample: Vec<_> = pieces_with_indices.into_iter().filter(|(_, x)| !ignore_pieces.contains(&x.0)).collect();
+        let sampled: Vec<_> = to_sample.choose_multiple_weighted(&mut rng, subsample_size - add_pieces.len(), |piece| (piece.1.1 / temperature).exp() * 10000.0).unwrap().cloned().collect();
 
         self.original_indices = sampled.iter().map(|(i, _)| *i).collect::<Vec<_>>();
         self.vocab = sampled.into_iter().map(|(_, p)| p.clone()).collect::<Vec<_>>();
