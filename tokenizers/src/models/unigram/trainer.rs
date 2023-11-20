@@ -34,7 +34,7 @@ pub enum UnigramTrainerError {
     VocabularyTooSmall,
 }
 
-fn to_log_prob(pieces: &mut [SentencePiece]) {
+pub(super) fn to_log_prob(pieces: &mut [SentencePiece]) {
     let sum: f64 = pieces.iter().map(|(_, score)| score).sum();
     let logsum = sum.ln();
     for (_, score) in pieces.iter_mut() {

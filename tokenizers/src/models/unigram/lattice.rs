@@ -92,7 +92,7 @@ pub struct Node {
     length: usize,
     prev: Option<NodeRef>,
     backtrace_score: f64,
-    score: f64,
+    pub(super) score: f64,
 }
 
 impl PartialEq for Node {
@@ -225,6 +225,10 @@ impl<'a> Lattice<'a> {
 
     pub fn piece(&self, node: &Node) -> String {
         self.sentence[node.pos..node.pos + node.length].to_owned()
+    }
+
+    pub fn piece_str(&self, node: &Node) -> &str {
+        &self.sentence[node.pos..node.pos + node.length]
     }
 
     pub fn tokens(&mut self) -> Vec<String> {

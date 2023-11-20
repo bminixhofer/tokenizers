@@ -2,6 +2,7 @@ use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, RwLock};
 
+use crate::pre_tokenizers::PyPreTokenizer;
 use crate::token::PyToken;
 use crate::trainers::PyTrainer;
 use pyo3::exceptions;
@@ -835,10 +836,15 @@ impl PyUnigram {
     }
 
     #[pyo3(text_signature = "(self, pieces)")]
-    fn get_all_encodings(self_: PyRef<Self>, sentence: &str) -> PyResult<Vec<Vec<String>>> {
-        let model: std::sync::RwLockReadGuard<'_, ModelWrapper> = self_.as_ref().model.read().unwrap();
+    fn get_top_n_encodings(
+        self_: PyRef<Self>,
+        sentence: &str,
+        top_n: Option<usize>,
+    ) -> PyResult<Vec<(Vec<usize>, f64)>> {
+        let model: std::sync::RwLockReadGuard<'_, ModelWrapper> =
+            self_.as_ref().model.read().unwrap();
         if let ModelWrapper::Unigram(ref unigram) = *model {
-            Ok(unigram.get_all_encodings(sentence))
+            Ok(unigram.get_top_n_encodings(sentence, top_n.unwrap_or(usize::MAX)))
         } else {
             unreachable!()
         }
@@ -846,7 +852,8 @@ impl PyUnigram {
 
     #[pyo3(text_signature = "(self, pieces)")]
     fn set_pieces(self_: PyRef<Self>, pieces: Vec<(String, f64)>) {
-        let mut model: std::sync::RwLockWriteGuard<'_, ModelWrapper> = self_.as_ref().model.write().unwrap();
+        let mut model: std::sync::RwLockWriteGuard<'_, ModelWrapper> =
+            self_.as_ref().model.write().unwrap();
         if let ModelWrapper::Unigram(ref mut unigram) = *model {
             unigram.set_pieces(pieces);
         }
@@ -854,7 +861,8 @@ impl PyUnigram {
 
     #[pyo3(text_signature = "(self, pieces)")]
     fn get_pieces(self_: PyRef<Self>) -> PyResult<Vec<(String, f64)>> {
-        let model: std::sync::RwLockReadGuard<'_, ModelWrapper> = self_.as_ref().model.read().unwrap();
+        let model: std::sync::RwLockReadGuard<'_, ModelWrapper> =
+            self_.as_ref().model.read().unwrap();
         if let ModelWrapper::Unigram(ref unigram) = *model {
             Ok(unigram.get_pieces())
         } else {
@@ -864,7 +872,8 @@ impl PyUnigram {
 
     #[pyo3(text_signature = "(self, vocab)")]
     fn set_vocab(self_: PyRef<Self>, vocab: HashMap<String, u32>) {
-        let mut model: std::sync::RwLockWriteGuard<'_, ModelWrapper> = self_.as_ref().model.write().unwrap();
+        let mut model: std::sync::RwLockWriteGuard<'_, ModelWrapper> =
+            self_.as_ref().model.write().unwrap();
         if let ModelWrapper::Unigram(ref mut unigram) = *model {
             unigram.set_vocab(vocab);
         }
@@ -872,7 +881,8 @@ impl PyUnigram {
 
     #[pyo3(text_signature = "(self, scores)")]
     fn set_scores(self_: PyRef<Self>, scores: Vec<f64>) {
-        let mut model: std::sync::RwLockWriteGuard<'_, ModelWrapper> = self_.as_ref().model.write().unwrap();
+        let mut model: std::sync::RwLockWriteGuard<'_, ModelWrapper> =
+            self_.as_ref().model.write().unwrap();
         if let ModelWrapper::Unigram(ref mut unigram) = *model {
             unigram.set_scores(scores);
         }
@@ -880,7 +890,8 @@ impl PyUnigram {
 
     #[pyo3(text_signature = "(self)")]
     fn get_scores(self_: PyRef<Self>) -> PyResult<Vec<f64>> {
-        let model: std::sync::RwLockReadGuard<'_, ModelWrapper> = self_.as_ref().model.read().unwrap();
+        let model: std::sync::RwLockReadGuard<'_, ModelWrapper> =
+            self_.as_ref().model.read().unwrap();
         if let ModelWrapper::Unigram(ref unigram) = *model {
             Ok(unigram.get_scores())
         } else {
@@ -890,23 +901,85 @@ impl PyUnigram {
 
     #[pyo3(text_signature = "(self)")]
     fn update_trie(self_: PyRef<Self>) {
-        let mut model: std::sync::RwLockWriteGuard<'_, ModelWrapper> = self_.as_ref().model.write().unwrap();
+        let mut model: std::sync::RwLockWriteGuard<'_, ModelWrapper> =
+            self_.as_ref().model.write().unwrap();
         if let ModelWrapper::Unigram(ref mut unigram) = *model {
             unigram.update_trie();
         }
     }
 
-    #[pyo3(text_signature = "(self, subsample_size, temperature, ignore_pieces, add_pieces, add_pieces_ids)")]
-    fn subsample(self_: PyRef<Self>, subsample_size: usize, temperature: f64, ignore_pieces: Option<Vec<String>>, add_pieces: Option<Vec<String>>, add_pieces_ids: Option<Vec<usize>>) {
-        let mut model: std::sync::RwLockWriteGuard<'_, ModelWrapper> = self_.as_ref().model.write().unwrap();
+    #[pyo3(text_signature = "(self, pre_tokenizer, texts, block_size, top_n)")]
+    fn encode_with_regularization(self_: PyRef<Self>, pre_tokenizer: PyPreTokenizer, text: String, top_n: usize, temperature: f64) -> PyResult<Vec<usize>> {
+        let model: std::sync::RwLockReadGuard<'_, ModelWrapper> =
+            self_.as_ref().model.read().unwrap();
+        if let ModelWrapper::Unigram(ref unigram) = *model {
+            Ok(unigram.encode_with_regularization(
+                pre_tokenizer,
+                text,
+                top_n,
+                temperature,
+            ))
+        } else {
+            unreachable!()
+        }
+    }
+
+    #[pyo3(text_signature = "(self, pre_tokenizer, texts, block_size, top_n)")]
+    fn encode_bpe_style(self_: PyRef<Self>, pre_tokenizer: PyPreTokenizer, texts: Vec<String>, block_size: usize, top_n: usize) -> PyResult<Vec<Vec<usize>>> {
+        let model: std::sync::RwLockReadGuard<'_, ModelWrapper> =
+            self_.as_ref().model.read().unwrap();
+        if let ModelWrapper::Unigram(ref unigram) = *model {
+            Ok(unigram.encode_bpe_style(
+                pre_tokenizer,
+                texts,
+                block_size,
+                top_n,
+            ))
+        } else {
+            unreachable!()
+        }
+    }
+
+    #[pyo3(text_signature = "(self, map, seed_size, max_length)")]
+    fn make_seed_sentence_pieces(self_: PyRef<Self>, map: HashMap<String, u32>, seed_size: usize, max_length: usize) -> PyResult<Vec<(String, f64)>> {
+        let model: std::sync::RwLockReadGuard<'_, ModelWrapper> = self_.as_ref().model.read().unwrap();
+        if let ModelWrapper::Unigram(ref unigram) = *model {
+            Ok(unigram.make_seed_sentence_pieces(map, seed_size, max_length))
+        } else {
+            unreachable!()
+        }
+    }
+
+    #[pyo3(
+        text_signature = "(self, subsample_size, temperature, ignore_pieces, add_pieces, add_pieces_ids)"
+    )]
+    fn subsample(
+        self_: PyRef<Self>,
+        subsample_size: usize,
+        temperature: f64,
+        ignore_pieces: Option<Vec<String>>,
+        add_pieces: Option<Vec<String>>,
+        add_pieces_ids: Option<Vec<usize>>,
+    ) {
+        let mut model: std::sync::RwLockWriteGuard<'_, ModelWrapper> =
+            self_.as_ref().model.write().unwrap();
         if let ModelWrapper::Unigram(ref mut unigram) = *model {
-            unigram.subsample(subsample_size, temperature, ignore_pieces.unwrap_or(Vec::new()), add_pieces.unwrap_or(Vec::new()), add_pieces_ids.unwrap_or(Vec::new()));
+            unigram.subsample(
+                subsample_size,
+                temperature,
+                ignore_pieces.unwrap_or(Vec::new()),
+                add_pieces.unwrap_or(Vec::new()),
+                add_pieces_ids.unwrap_or(Vec::new()),
+            )
+        } else {
+            unreachable!()
         }
     }
 
     #[pyo3(text_signature = "(self)")]
     fn get_original_indices(self_: PyRef<Self>) -> PyResult<Vec<usize>> {
-        let model: std::sync::RwLockReadGuard<'_, ModelWrapper> = self_.as_ref().model.read().unwrap();
+        let model: std::sync::RwLockReadGuard<'_, ModelWrapper> =
+            self_.as_ref().model.read().unwrap();
         if let ModelWrapper::Unigram(ref unigram) = *model {
             Ok(unigram.get_original_indices())
         } else {

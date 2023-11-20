@@ -1,13 +1,17 @@
 use itertools::Itertools;
 use rand::seq::SliceRandom;
+use std::cmp::Reverse;
 
 use super::{
     lattice::Lattice,
     trainer::UnigramTrainer,
     trie::{Trie, TrieBuilder},
 };
-use crate::tokenizer::{Model, Result, Token};
 use crate::utils::cache::Cache;
+use crate::{
+    tokenizer::{Model, Result, Token},
+    OffsetReferential, OffsetType, PreTokenizedString, PreTokenizer,
+};
 
 use std::collections::{HashMap, HashSet};
 use std::convert::TryInto;
@@ -33,7 +37,9 @@ pub struct Unigram {
     byte_fallback: bool,
 
     original_vocab: Vocab,
-    original_indices: Vec<usize>
+    original_indices: Vec<usize>,
+
+    subsample_cache: once_cell::sync::OnceCell<(Vec<f64>, Vec<(usize, (String, f64))>, HashMap<String, usize>)>,
 }
 impl PartialEq for Unigram {
     fn eq(&self, other: &Self) -> bool {
@@ -59,7 +65,8 @@ impl Clone for Unigram {
             is_optimized: self.is_optimized,
             byte_fallback: self.byte_fallback,
             original_vocab: self.original_vocab.clone(),
-            original_indices: self.original_indices.clone()
+            original_indices: self.original_indices.clone(),
+            subsample_cache: once_cell::sync::OnceCell::new(),
         }
     }
 }
@@ -75,6 +82,7 @@ impl std::fmt::Debug for Unigram {
 }
 
 static K_UNK_PENALTY: f64 = 10.0;
+static LARGE_NUMBER: f64 = 10e12;
 
 #[derive(thiserror::Error, Debug)]
 pub enum UnigramError {
@@ -148,6 +156,7 @@ impl Unigram {
 
             original_indices: (0..vocab.len()).collect(),
             original_vocab: vocab,
+            subsample_cache: once_cell::sync::OnceCell::new(),
         })
     }
 
@@ -168,34 +177,274 @@ impl Unigram {
         self.vocab.len()
     }
 
-    pub fn subsample(&mut self, subsample_size: usize, temperature: f64, ignore_pieces: Vec<String>, add_pieces: Vec<String>, add_pieces_ids: Vec<usize>) {
+    pub fn encode_with_regularization<T: PreTokenizer>(&self, pre_tokenizer: T, text: String, top_n: usize, temperature: f64) -> Vec<usize> {
         let mut rng = rand::thread_rng();
 
-        let ignore_pieces: HashSet<_> = ignore_pieces.into_iter().chain(add_pieces.clone().into_iter()).collect();
-        let pieces_with_indices: Vec<_> = self.original_vocab.iter().enumerate().collect();
-        let piece_to_original_index: HashMap<_, _> = pieces_with_indices.iter().map(|(i, (p, _))| (p, *i)).collect();
+        let mut pretokenized: PreTokenizedString = text.into();
+        pre_tokenizer.pre_tokenize(&mut pretokenized).unwrap();
+        let mut input_ids: Vec<usize> = Vec::new();
+
+        let mut pre_token_to_tokenization: HashMap<String, Vec<usize>> = HashMap::new();
+
+        for (pretoken, _, _) in pretokenized.get_splits(OffsetReferential::Original, OffsetType::Byte).iter() {
+            if let Some(sequence) = pre_token_to_tokenization.get(*pretoken) {
+                input_ids.extend(sequence)
+            } else {
+                let tokenizations = self.get_top_n_encodings(pretoken, top_n);
+
+                let scores: Vec<_> = tokenizations
+                    .iter()
+                    .map(|t| {
+                        t.0.iter().map(|x| self.vocab[*x].1).sum::<f64>() / temperature
+                    })
+                    .collect();
+                let max_score =
+                    scores.iter().fold(
+                        f64::NEG_INFINITY,
+                        |max, &val| if val > max { val } else { max },
+                    );
+                let exp_scores: Vec<_> = scores.iter().map(|x| (x - max_score).exp()).collect();
+                let exp_scores_sum: f64 = exp_scores.iter().sum();
+    
+                let probs: Vec<f64> = exp_scores
+                    .iter()
+                    .map(|x| x / exp_scores_sum * LARGE_NUMBER)
+                    .collect();
+                let index = *(0..probs.len())
+                    .collect::<Vec<_>>()
+                    .choose_weighted(&mut rng, |i| probs[*i])
+                    .unwrap();
+                input_ids.extend(tokenizations[index].0.iter().cloned());
+                pre_token_to_tokenization.insert((*pretoken).to_owned(), tokenizations[index].0.clone());
+            }
+        }
+
+        input_ids
+    }
+
+    pub fn encode_bpe_style<T: PreTokenizer>(&self, pre_tokenizer: T, texts: Vec<String>, block_size: usize, top_n: usize) -> Vec<Vec<usize>> {
+        let mut all_input_ids: Vec<Vec<usize>> = Vec::with_capacity(texts.len());
+        let mut cache: HashMap<String, Vec<usize>> = HashMap::new();
+
+        // tokenize batch with the sampled vocab
+        for text in texts {
+            let mut pretokenized: PreTokenizedString = text.into();
+            pre_tokenizer.pre_tokenize(&mut pretokenized).unwrap();
+            let mut input_ids: Vec<usize> = Vec::with_capacity(block_size);
+
+            for (pretoken, _, _) in pretokenized.get_splits(OffsetReferential::Original, OffsetType::Byte).iter() {
+                let sequence = if let Some(sequence) = cache.get(*pretoken) {
+                    sequence.clone()
+                } else {
+                    let tokenizations = self.get_top_n_encodings(&pretoken, top_n);
+                    let mut surface_forms: Vec<_> = tokenizations
+                        .iter()
+                        .enumerate()
+                        .map(|(i, t)| {
+                            (
+                                i,
+                                t.0.iter()
+                                    .map(|x| self.id_to_token(*x as u32).unwrap())
+                                    .collect::<Vec<_>>(),
+                            )
+                        })
+                        .collect();
+                    surface_forms.sort_by_key(|(_, s)| {
+                        Reverse((
+                            s.iter().map(|x| 11 * x.chars().count() - 1).sum::<usize>(),
+                            s.iter().cloned().collect::<Vec<_>>(),
+                        ))
+                    });
+                    let sequence = tokenizations[surface_forms[0].0].0.clone();
+                    cache.insert((*pretoken).to_owned(), sequence.clone());
+                    sequence
+                };
+
+                for id in sequence.iter() {
+                    if input_ids.len() < block_size {
+                        input_ids.push(*id);
+                    }
+                }
+
+                if input_ids.len() == block_size {
+                    break;
+                }
+            }
+
+            while input_ids.len() < block_size {
+                // also convention? :|
+                input_ids.push(0);
+            }
+
+            all_input_ids.push(input_ids);
+        }
+
+        all_input_ids
+    }
+
+    pub fn make_seed_sentence_pieces(
+        &self,
+        map: HashMap<String, u32>,
+        seed_size: usize,
+        max_length: usize
+    ) -> Vec<(String, f64)> {
+        let sentences: Vec<(Vec<char>, u32)> = map.iter().map(|(s, i)| (s.chars().collect(), *i)).collect();
+
+        let mut all_chars: HashSet<char> = HashSet::new();
+
+        for (string, _) in &sentences {
+            for c in string {
+                all_chars.insert(*c);
+            }
+        }
+
+        //  Basic chars need to be in sentence pieces.
+        let mut seed_sentencepieces: Vec<(String, f64)> = vec![];
+
+        println!("Constructing prefixes / suffixes...");
+
+        let suffixes: Vec<_> = sentences.iter().map(|(string, _)| {
+            let mut pieces = Vec::with_capacity(string.len() * 2);
+            for i in 0..string.len() {
+                pieces.push(&string[i..]);
+            }
+            for i in 1..(string.len() + 1) {
+                pieces.push(&string[..i]);
+            }
+            pieces
+        }).collect();
+
+        println!("Computing scores...");
+
+        let mut substr_index: HashMap<String, u32> = HashMap::new();
+
+        for ((_, n), suffix) in sentences.iter().zip(suffixes.iter()) {
+            for string in suffix.iter() {
+                let freq = n;
+
+                if string.is_empty() {
+                    continue;
+                }
+                if string.len() > max_length {
+                    continue;
+                }
+                let score = freq * string.len() as u32;
+
+                substr_index.entry(string.iter().collect()).and_modify(|e| {*e += score}).or_insert(score);
+            }
+        }
+
+        println!("Filling & sorting...");
+
+        // Fill seed_sentencepieces
+        for character in all_chars {
+            let string = character.to_string();
+            let count = *substr_index.get(&string).unwrap_or(&1);
+
+            seed_sentencepieces.push((string, count.into()));
+        }
+
+        let mut substr_index = substr_index.into_iter().collect::<Vec<_>>();
+
+        // sort by decreasing score
+        substr_index.sort_by_key(|a| Reverse(a.1));
+
+        for (string, score) in substr_index {
+            if string.chars().count() == 1 {
+                // already added
+                continue;
+            }
+            seed_sentencepieces.push((string, score.into()));
+            if seed_sentencepieces.len() >= seed_size {
+                break;
+            }
+        }
+        super::to_log_prob(&mut seed_sentencepieces);
+        seed_sentencepieces
+    }
+
+    pub fn subsample(
+        &mut self,
+        subsample_size: usize,
+        temperature: f64,
+        ignore_pieces: Vec<String>,
+        add_pieces: Vec<String>,
+        add_pieces_ids: Vec<usize>,
+    ) {
+        let mut rng = rand::thread_rng();
+
+        let ignore_pieces: HashSet<_> = ignore_pieces
+            .into_iter()
+            .chain(add_pieces.clone().into_iter())
+            .collect();
+
+        // NB: this assumes ignore_pieces and temperature are the same across all calls!! very bad pattern btw
+        // but it should speed things up a lot
+        let (probs, pieces_with_indices, piece_to_original_index) = self.subsample_cache.get_or_init(|| {
+            let exp_logprobs: Vec<f64> = self
+            .original_vocab
+            .iter()
+            .map(|x| (x.1 / temperature).exp())
+            .collect();
+            let exp_logprobs_sum = exp_logprobs.iter().sum::<f64>();
+            let probs: Vec<_> = exp_logprobs
+                .iter()
+                .map(|x| x / exp_logprobs_sum * LARGE_NUMBER)
+                .collect();
+
+            let pieces_with_indices: Vec<_> = self.original_vocab.iter().enumerate().map(|x| (x.0, x.1.to_owned())).collect();
+            let piece_to_original_index: HashMap<_, _> = pieces_with_indices
+                .iter()
+                .map(|(i, (p, _))| (p.to_owned(), *i))
+                .collect();
+
+            (probs, pieces_with_indices, piece_to_original_index)
+        });
 
         // sampling is wrong (samples low prob. too much) without the large multiplier
         // maybe f64 imprecisions?
-        let to_sample: Vec<_> = pieces_with_indices.into_iter().filter(|(_, x)| !ignore_pieces.contains(&x.0)).collect();
-        let sampled: Vec<_> = to_sample.choose_multiple_weighted(&mut rng, subsample_size - add_pieces.len(), |piece| (piece.1.1 / temperature).exp() * 10000.0).unwrap().cloned().collect();
+        let to_sample: Vec<_> = pieces_with_indices
+            .into_iter()
+            .filter(|(_, x)| !ignore_pieces.contains(&x.0))
+            .collect();
+        let sampled: Vec<_> = to_sample
+            .choose_multiple_weighted(&mut rng, subsample_size - add_pieces.len(), |piece| {
+                probs[piece.0]
+            })
+            .unwrap()
+            .cloned()
+            .collect();
 
         self.original_indices = sampled.iter().map(|(i, _)| *i).collect::<Vec<_>>();
-        self.vocab = sampled.into_iter().map(|(_, p)| p.clone()).collect::<Vec<_>>();
+        self.vocab = sampled
+            .into_iter()
+            .map(|(_, p)| p.clone())
+            .collect::<Vec<_>>();
 
-        for (piece, index) in add_pieces.iter().zip(add_pieces_ids.iter()).sorted_by_key(|x| x.1) {
-            self.vocab.insert(*index, (piece.clone(), 0.0));
-            self.original_indices.insert(0, piece_to_original_index.get(piece).cloned().unwrap_or(usize::MAX));
+        for (piece, index) in add_pieces
+            .iter()
+            .zip(add_pieces_ids.iter())
+            .sorted_by_key(|x| x.1)
+        {
+            let original_index = piece_to_original_index
+                .get(piece)
+                .cloned();
+
+            self.vocab.insert(*index, (piece.clone(), original_index.map_or(0.0, |i| self.original_vocab[i].1)));
+            self.original_indices.insert(
+                *index,
+                original_index.unwrap_or(usize::MAX),
+            );
         }
 
-        // TODO: this is problematic :|
+        // this is problematic :|
         // may be fine as implicit convention?
         self.unk_id = Some(0);
 
         self.cache = self.cache.fresh();
         self.update_trie();
 
-        self.token_to_ids = HashMap::new();
+        self.token_to_ids = HashMap::with_capacity(self.vocab.len());
         for (id, (token, _)) in self.vocab.iter().enumerate() {
             self.token_to_ids.insert(token.to_string(), id as u32);
         }
@@ -319,10 +568,25 @@ impl Unigram {
         }
     }
 
-    pub fn get_all_encodings(&self, sentence: &str) -> Vec<Vec<String>> {
+    pub fn get_top_n_encodings(&self, sentence: &str, n: usize) -> Vec<(Vec<usize>, f64)> {
         let mut lattice = Lattice::from(sentence, self.bos_id, self.eos_id);
         self.populate_nodes(&mut lattice);
-        lattice.nbest_tokens(usize::MAX)
+        lattice
+            .nbest(n)
+            .iter()
+            .map(|x| {
+                let ids: Vec<_> = x
+                    .iter()
+                    .map(|node| {
+                        let tok = lattice.piece_str(&node.borrow());
+                        *self.token_to_ids.get(tok).unwrap() as usize
+                    })
+                    .collect();
+
+                let score = x.iter().fold(0.0, |acc, node| acc + node.borrow().score);
+                (ids, score)
+            })
+            .collect()
     }
 
     fn encode_optimized(&self, sentence: &str) -> Result<Vec<String>> {
