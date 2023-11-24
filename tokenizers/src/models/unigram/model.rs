@@ -222,7 +222,7 @@ impl Unigram {
         input_ids
     }
 
-    pub fn encode_bpe_style<T: PreTokenizer>(&self, pre_tokenizer: T, texts: Vec<String>, block_size: usize, top_n: usize) -> Vec<Vec<usize>> {
+    pub fn encode_bpe_style<T: PreTokenizer>(&self, pre_tokenizer: T, texts: Vec<String>, block_size: Option<usize>, top_n: usize) -> Vec<Vec<usize>> {
         let mut all_input_ids: Vec<Vec<usize>> = Vec::with_capacity(texts.len());
         let mut cache: HashMap<String, Vec<usize>> = HashMap::new();
 
@@ -230,7 +230,7 @@ impl Unigram {
         for text in texts {
             let mut pretokenized: PreTokenizedString = text.into();
             pre_tokenizer.pre_tokenize(&mut pretokenized).unwrap();
-            let mut input_ids: Vec<usize> = Vec::with_capacity(block_size);
+            let mut input_ids: Vec<usize> = Vec::with_capacity(block_size.unwrap_or(0));
 
             for (pretoken, _, _) in pretokenized.get_splits(OffsetReferential::Original, OffsetType::Byte).iter() {
                 let sequence = if let Some(sequence) = cache.get(*pretoken) {
@@ -261,19 +261,21 @@ impl Unigram {
                 };
 
                 for id in sequence.iter() {
-                    if input_ids.len() < block_size {
+                    if input_ids.len() < block_size.unwrap_or(usize::MAX) {
                         input_ids.push(*id);
                     }
                 }
 
-                if input_ids.len() == block_size {
+                if input_ids.len() == block_size.unwrap_or(usize::MAX) {
                     break;
                 }
             }
 
-            while input_ids.len() < block_size {
-                // also convention? :|
-                input_ids.push(0);
+            if let Some(block_size) = block_size {
+                while input_ids.len() < block_size {
+                    // also convention? :|
+                    input_ids.push(0);
+                }
             }
 
             all_input_ids.push(input_ids);

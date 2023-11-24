@@ -925,7 +925,7 @@ impl PyUnigram {
     }
 
     #[pyo3(text_signature = "(self, pre_tokenizer, texts, block_size, top_n)")]
-    fn encode_bpe_style(self_: PyRef<Self>, pre_tokenizer: PyPreTokenizer, texts: Vec<String>, block_size: usize, top_n: usize) -> PyResult<Vec<Vec<usize>>> {
+    fn encode_bpe_style(self_: PyRef<Self>, pre_tokenizer: PyPreTokenizer, texts: Vec<String>, block_size: Option<usize>, top_n: Option<usize>) -> PyResult<Vec<Vec<usize>>> {
         let model: std::sync::RwLockReadGuard<'_, ModelWrapper> =
             self_.as_ref().model.read().unwrap();
         if let ModelWrapper::Unigram(ref unigram) = *model {
@@ -933,7 +933,7 @@ impl PyUnigram {
                 pre_tokenizer,
                 texts,
                 block_size,
-                top_n,
+                top_n.unwrap_or(16), // TODO: probably don't hardcode
             ))
         } else {
             unreachable!()
