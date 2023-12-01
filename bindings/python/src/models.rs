@@ -955,8 +955,8 @@ impl PyUnigram {
     )]
     fn subsample(
         self_: PyRef<Self>,
-        subsample_size: usize,
-        temperature: f64,
+        subsample_size: Option<usize>,
+        temperature: Option<f64>,
         ignore_pieces: Option<Vec<String>>,
         add_pieces: Option<Vec<String>>,
         add_pieces_ids: Option<Vec<usize>>,
@@ -965,8 +965,8 @@ impl PyUnigram {
             self_.as_ref().model.write().unwrap();
         if let ModelWrapper::Unigram(ref mut unigram) = *model {
             unigram.subsample(
-                subsample_size,
-                temperature,
+                subsample_size.unwrap_or(usize::MAX),
+                temperature.unwrap_or(1.0),
                 ignore_pieces.unwrap_or(Vec::new()),
                 add_pieces.unwrap_or(Vec::new()),
                 add_pieces_ids.unwrap_or(Vec::new()),
