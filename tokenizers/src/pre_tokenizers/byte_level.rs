@@ -34,7 +34,7 @@ fn bytes_char() -> HashMap<u8, char> {
 
 lazy_static! {
     static ref RE: SysRegex = SysRegex::new(
-        r"'s|'t|'re|'ve|'m|'ll|'d| ?\p{L}+| ?\p{N}+| ?[^\s\p{L}\p{N}]+|\s+(?!\S)|\s+"
+        r"'s|'t|'re|'ve|'m|'ll|'d| ?[\p{L}\p{M}]+| ?\p{N}+| ?[^\s\p{L}\p{N}]+|\s+(?!\S)|\s+"
     )
     .unwrap();
     static ref BYTES_CHAR: HashMap<u8, char> = bytes_char();
