@@ -288,7 +288,8 @@ impl Unigram {
         &self,
         map: HashMap<String, u32>,
         seed_size: usize,
-        max_length: usize
+        max_length: usize,
+        prefix_suffix_only: bool,
     ) -> Vec<(String, f64)> {
         let sentences: Vec<(Vec<char>, u32)> = map.iter().map(|(s, i)| (s.chars().collect(), *i)).collect();
 
@@ -303,20 +304,32 @@ impl Unigram {
         //  Basic chars need to be in sentence pieces.
         let mut seed_sentencepieces: Vec<(String, f64)> = vec![];
 
-        println!("Constructing prefixes / suffixes...");
+        // println!("Constructing prefixes / suffixes...");
 
         let suffixes: Vec<_> = sentences.iter().map(|(string, _)| {
-            let mut pieces = Vec::with_capacity(string.len() * 2);
-            for i in 0..string.len() {
-                pieces.push(&string[i..]);
-            }
-            for i in 1..(string.len() + 1) {
-                pieces.push(&string[..i]);
-            }
+            let pieces = if prefix_suffix_only {
+                let mut pieces = Vec::with_capacity(string.len() * (string.len() + 1) / 2);
+            
+                for i in 0..string.len() {
+                    pieces.push(&string[i..]);
+                }
+                for i in 1..(string.len() + 1) {
+                    pieces.push(&string[..i]);
+                }
+                pieces
+            } else {
+                let mut pieces = Vec::with_capacity(string.len() * 2);
+                for i in 0..string.len() {
+                    for j in (i + 1)..(string.len() + 1) {
+                        pieces.push(&string[i..j]);
+                    }
+                }
+                pieces
+            };
             pieces
         }).collect();
 
-        println!("Computing scores...");
+        // println!("Computing scores...");
 
         let mut substr_index: HashMap<String, u32> = HashMap::new();
 
@@ -336,7 +349,7 @@ impl Unigram {
             }
         }
 
-        println!("Filling & sorting...");
+        // println!("Filling & sorting...");
 
         // Fill seed_sentencepieces
         for character in all_chars {

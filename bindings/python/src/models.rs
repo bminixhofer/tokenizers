@@ -941,10 +941,10 @@ impl PyUnigram {
     }
 
     #[pyo3(text_signature = "(self, map, seed_size, max_length)")]
-    fn make_seed_sentence_pieces(self_: PyRef<Self>, map: HashMap<String, u32>, seed_size: usize, max_length: usize) -> PyResult<Vec<(String, f64)>> {
+    fn make_seed_sentence_pieces(self_: PyRef<Self>, map: HashMap<String, u32>, seed_size: usize, max_length: usize, prefix_suffix_only: Option<bool>) -> PyResult<Vec<(String, f64)>> {
         let model: std::sync::RwLockReadGuard<'_, ModelWrapper> = self_.as_ref().model.read().unwrap();
         if let ModelWrapper::Unigram(ref unigram) = *model {
-            Ok(unigram.make_seed_sentence_pieces(map, seed_size, max_length))
+            Ok(unigram.make_seed_sentence_pieces(map, seed_size, max_length, prefix_suffix_only.unwrap_or(false)))
         } else {
             unreachable!()
         }
