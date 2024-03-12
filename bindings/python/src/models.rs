@@ -953,7 +953,7 @@ impl PyUnigram {
         map: HashMap<String, u32>,
         seed_size: usize,
         max_length: usize,
-        prefix_suffix_only: Option<bool>,
+        stride: Option<usize>,
         noise_std: Option<f64>,
     ) -> PyResult<Vec<(String, f64)>> {
         let model: std::sync::RwLockReadGuard<'_, ModelWrapper> =
@@ -963,7 +963,7 @@ impl PyUnigram {
                 map,
                 seed_size,
                 max_length,
-                prefix_suffix_only.unwrap_or(false),
+                stride.unwrap_or(1),
                 noise_std.unwrap_or(0.0),
             ))
         } else {
