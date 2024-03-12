@@ -909,23 +909,30 @@ impl PyUnigram {
     }
 
     #[pyo3(text_signature = "(self, pre_tokenizer, texts, block_size, top_n)")]
-    fn encode_with_regularization(self_: PyRef<Self>, pre_tokenizer: PyPreTokenizer, text: String, top_n: usize, temperature: f64) -> PyResult<Vec<usize>> {
+    fn encode_with_regularization(
+        self_: PyRef<Self>,
+        pre_tokenizer: PyPreTokenizer,
+        text: String,
+        top_n: usize,
+        temperature: f64,
+    ) -> PyResult<Vec<usize>> {
         let model: std::sync::RwLockReadGuard<'_, ModelWrapper> =
             self_.as_ref().model.read().unwrap();
         if let ModelWrapper::Unigram(ref unigram) = *model {
-            Ok(unigram.encode_with_regularization(
-                pre_tokenizer,
-                text,
-                top_n,
-                temperature,
-            ))
+            Ok(unigram.encode_with_regularization(pre_tokenizer, text, top_n, temperature))
         } else {
             unreachable!()
         }
     }
 
     #[pyo3(text_signature = "(self, pre_tokenizer, texts, block_size, top_n)")]
-    fn encode_bpe_style(self_: PyRef<Self>, pre_tokenizer: PyPreTokenizer, texts: Vec<String>, block_size: Option<usize>, top_n: Option<usize>) -> PyResult<Vec<Vec<usize>>> {
+    fn encode_bpe_style(
+        self_: PyRef<Self>,
+        pre_tokenizer: PyPreTokenizer,
+        texts: Vec<String>,
+        block_size: Option<usize>,
+        top_n: Option<usize>,
+    ) -> PyResult<Vec<Vec<usize>>> {
         let model: std::sync::RwLockReadGuard<'_, ModelWrapper> =
             self_.as_ref().model.read().unwrap();
         if let ModelWrapper::Unigram(ref unigram) = *model {
@@ -941,10 +948,24 @@ impl PyUnigram {
     }
 
     #[pyo3(text_signature = "(self, map, seed_size, max_length)")]
-    fn make_seed_sentence_pieces(self_: PyRef<Self>, map: HashMap<String, u32>, seed_size: usize, max_length: usize, prefix_suffix_only: Option<bool>) -> PyResult<Vec<(String, f64)>> {
-        let model: std::sync::RwLockReadGuard<'_, ModelWrapper> = self_.as_ref().model.read().unwrap();
+    fn make_seed_sentence_pieces(
+        self_: PyRef<Self>,
+        map: HashMap<String, u32>,
+        seed_size: usize,
+        max_length: usize,
+        prefix_suffix_only: Option<bool>,
+        noise_std: Option<f64>,
+    ) -> PyResult<Vec<(String, f64)>> {
+        let model: std::sync::RwLockReadGuard<'_, ModelWrapper> =
+            self_.as_ref().model.read().unwrap();
         if let ModelWrapper::Unigram(ref unigram) = *model {
-            Ok(unigram.make_seed_sentence_pieces(map, seed_size, max_length, prefix_suffix_only.unwrap_or(false)))
+            Ok(unigram.make_seed_sentence_pieces(
+                map,
+                seed_size,
+                max_length,
+                prefix_suffix_only.unwrap_or(false),
+                noise_std.unwrap_or(0.0),
+            ))
         } else {
             unreachable!()
         }

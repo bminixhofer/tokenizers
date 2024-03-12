@@ -554,10 +554,19 @@ impl UnigramTrainer {
                 .map(|(s, score)| (s.as_str(), score))
                 .collect();
 
-            let seed_sentencepieces: Vec<_> = seed_vocab.clone().into_iter().map(|s| (s.clone(), **seed_sentencepieces_map.get(s.as_str()).unwrap_or(&&0.0))).collect();
+            let seed_sentencepieces: Vec<_> = seed_vocab
+                .clone()
+                .into_iter()
+                .map(|s| {
+                    (
+                        s.clone(),
+                        **seed_sentencepieces_map.get(s.as_str()).unwrap_or(&&0.0),
+                    )
+                })
+                .collect();
             pieces.extend(seed_sentencepieces);
         } else {
-            pieces.extend(seed_sentencepieces);            
+            pieces.extend(seed_sentencepieces);
         }
         self.finalize_progress(&progress, sentences.len());
 

@@ -1,5 +1,6 @@
 use itertools::Itertools;
 use rand::seq::SliceRandom;
+use rand_distr::{Distribution, Normal};
 use std::cmp::Reverse;
 
 use super::{
@@ -39,7 +40,11 @@ pub struct Unigram {
     original_vocab: Vocab,
     original_indices: Vec<usize>,
 
-    subsample_cache: once_cell::sync::OnceCell<(Vec<f64>, Vec<(usize, (String, f64))>, HashMap<String, usize>)>,
+    subsample_cache: once_cell::sync::OnceCell<(
+        Vec<f64>,
+        Vec<(usize, (String, f64))>,
+        HashMap<String, usize>,
+    )>,
 }
 impl PartialEq for Unigram {
     fn eq(&self, other: &Self) -> bool {
@@ -177,7 +182,13 @@ impl Unigram {
         self.vocab.len()
     }
 
-    pub fn encode_with_regularization<T: PreTokenizer>(&self, pre_tokenizer: T, text: String, top_n: usize, temperature: f64) -> Vec<usize> {
+    pub fn encode_with_regularization<T: PreTokenizer>(
+        &self,
+        pre_tokenizer: T,
+        text: String,
+        top_n: usize,
+        temperature: f64,
+    ) -> Vec<usize> {
         let mut rng = rand::thread_rng();
 
         let mut pretokenized: PreTokenizedString = text.into();
@@ -186,7 +197,10 @@ impl Unigram {
 
         let mut pre_token_to_tokenization: HashMap<String, Vec<usize>> = HashMap::new();
 
-        for (pretoken, _, _) in pretokenized.get_splits(OffsetReferential::Original, OffsetType::Byte).iter() {
+        for (pretoken, _, _) in pretokenized
+            .get_splits(OffsetReferential::Original, OffsetType::Byte)
+            .iter()
+        {
             if let Some(sequence) = pre_token_to_tokenization.get(*pretoken) {
                 input_ids.extend(sequence)
             } else {
@@ -194,9 +208,7 @@ impl Unigram {
 
                 let scores: Vec<_> = tokenizations
                     .iter()
-                    .map(|t| {
-                        t.0.iter().map(|x| self.vocab[*x].1).sum::<f64>() / temperature
-                    })
+                    .map(|t| t.0.iter().map(|x| self.vocab[*x].1).sum::<f64>() / temperature)
                     .collect();
                 let max_score =
                     scores.iter().fold(
@@ -205,7 +217,7 @@ impl Unigram {
                     );
                 let exp_scores: Vec<_> = scores.iter().map(|x| (x - max_score).exp()).collect();
                 let exp_scores_sum: f64 = exp_scores.iter().sum();
-    
+
                 let probs: Vec<f64> = exp_scores
                     .iter()
                     .map(|x| x / exp_scores_sum * LARGE_NUMBER)
@@ -215,14 +227,21 @@ impl Unigram {
                     .choose_weighted(&mut rng, |i| probs[*i])
                     .unwrap();
                 input_ids.extend(tokenizations[index].0.iter().cloned());
-                pre_token_to_tokenization.insert((*pretoken).to_owned(), tokenizations[index].0.clone());
+                pre_token_to_tokenization
+                    .insert((*pretoken).to_owned(), tokenizations[index].0.clone());
             }
         }
 
         input_ids
     }
 
-    pub fn encode_bpe_style<T: PreTokenizer>(&self, pre_tokenizer: T, texts: Vec<String>, block_size: Option<usize>, top_n: usize) -> Vec<Vec<usize>> {
+    pub fn encode_bpe_style<T: PreTokenizer>(
+        &self,
+        pre_tokenizer: T,
+        texts: Vec<String>,
+        block_size: Option<usize>,
+        top_n: usize,
+    ) -> Vec<Vec<usize>> {
         let mut all_input_ids: Vec<Vec<usize>> = Vec::with_capacity(texts.len());
         let mut cache: HashMap<String, Vec<usize>> = HashMap::new();
 
@@ -232,7 +251,10 @@ impl Unigram {
             pre_tokenizer.pre_tokenize(&mut pretokenized).unwrap();
             let mut input_ids: Vec<usize> = Vec::with_capacity(block_size.unwrap_or(0));
 
-            for (pretoken, _, _) in pretokenized.get_splits(OffsetReferential::Original, OffsetType::Byte).iter() {
+            for (pretoken, _, _) in pretokenized
+                .get_splits(OffsetReferential::Original, OffsetType::Byte)
+                .iter()
+            {
                 let sequence = if let Some(sequence) = cache.get(*pretoken) {
                     sequence.clone()
                 } else {
@@ -290,8 +312,10 @@ impl Unigram {
         seed_size: usize,
         max_length: usize,
         prefix_suffix_only: bool,
+        noise_std: f64,
     ) -> Vec<(String, f64)> {
-        let sentences: Vec<(Vec<char>, u32)> = map.iter().map(|(s, i)| (s.chars().collect(), *i)).collect();
+        let sentences: Vec<(Vec<char>, u32)> =
+            map.iter().map(|(s, i)| (s.chars().collect(), *i)).collect();
 
         let mut all_chars: HashSet<char> = HashSet::new();
 
@@ -306,32 +330,35 @@ impl Unigram {
 
         // println!("Constructing prefixes / suffixes...");
 
-        let suffixes: Vec<_> = sentences.iter().map(|(string, _)| {
-            let pieces = if prefix_suffix_only {
-                let mut pieces = Vec::with_capacity(string.len() * (string.len() + 1) / 2);
-            
-                for i in 0..string.len() {
-                    pieces.push(&string[i..]);
-                }
-                for i in 1..(string.len() + 1) {
-                    pieces.push(&string[..i]);
-                }
-                pieces
-            } else {
-                let mut pieces = Vec::with_capacity(string.len() * 2);
-                for i in 0..string.len() {
-                    for j in (i + 1)..(string.len() + 1) {
-                        pieces.push(&string[i..j]);
+        let suffixes: Vec<_> = sentences
+            .iter()
+            .map(|(string, _)| {
+                let pieces = if prefix_suffix_only {
+                    let mut pieces = Vec::with_capacity(string.len() * (string.len() + 1) / 2);
+
+                    for i in 0..string.len() {
+                        pieces.push(&string[i..]);
                     }
-                }
+                    for i in 1..(string.len() + 1) {
+                        pieces.push(&string[..i]);
+                    }
+                    pieces
+                } else {
+                    let mut pieces = Vec::with_capacity(string.len() * 2);
+                    for i in 0..string.len() {
+                        for j in (i + 1)..(string.len() + 1) {
+                            pieces.push(&string[i..j]);
+                        }
+                    }
+                    pieces
+                };
                 pieces
-            };
-            pieces
-        }).collect();
+            })
+            .collect();
 
         // println!("Computing scores...");
 
-        let mut substr_index: HashMap<String, u32> = HashMap::new();
+        let mut substr_index: HashMap<String, f64> = HashMap::new();
 
         for ((_, n), suffix) in sentences.iter().zip(suffixes.iter()) {
             for string in suffix.iter() {
@@ -343,38 +370,51 @@ impl Unigram {
                 if string.len() > max_length {
                     continue;
                 }
-                let score = freq * string.len() as u32;
+                let score = (freq * string.len() as u32) as f64;
 
-                substr_index.entry(string.iter().collect()).and_modify(|e| {*e += score}).or_insert(score);
+                substr_index
+                    .entry(string.iter().collect())
+                    .and_modify(|e| *e += score)
+                    .or_insert(score);
             }
         }
 
         // println!("Filling & sorting...");
 
+        let score_sum = substr_index.iter().map(|x| x.1).sum::<f64>();
+        let min_score = substr_index.iter().fold(f64::INFINITY, |a, b| a.min(*b.1)) as f64;
+        let min_prob = min_score / score_sum;
+
         // Fill seed_sentencepieces
         for character in all_chars {
             let string = character.to_string();
-            let count = *substr_index.get(&string).unwrap_or(&1);
+            let logprob = (substr_index.get(&string).unwrap_or(&min_score) / score_sum).ln();
 
-            seed_sentencepieces.push((string, count.into()));
+            seed_sentencepieces.push((string, logprob));
         }
 
         let mut substr_index = substr_index.into_iter().collect::<Vec<_>>();
+        let mut rng = rand::thread_rng();
+        let normal = Normal::new(0.0, noise_std).unwrap();
+
+        substr_index.iter_mut().for_each(|x| {
+            let noised = x.1 as f64 / score_sum as f64 + normal.sample(&mut rng);
+            x.1 = f64::max(noised, min_prob).ln();
+        });
 
         // sort by decreasing score
-        substr_index.sort_by_key(|a| Reverse(a.1));
+        substr_index.sort_by(|a, b| b.1.partial_cmp(&a.1).unwrap());
 
         for (string, score) in substr_index {
             if string.chars().count() == 1 {
                 // already added
                 continue;
             }
-            seed_sentencepieces.push((string, score.into()));
+            seed_sentencepieces.push((string, score));
             if seed_sentencepieces.len() >= seed_size {
                 break;
             }
         }
-        super::to_log_prob(&mut seed_sentencepieces);
         seed_sentencepieces
     }
 
@@ -395,26 +435,32 @@ impl Unigram {
 
         // NB: this assumes ignore_pieces and temperature are the same across all calls!! very bad pattern btw
         // but it should speed things up a lot
-        let (probs, pieces_with_indices, piece_to_original_index) = self.subsample_cache.get_or_init(|| {
-            let exp_logprobs: Vec<f64> = self
-            .original_vocab
-            .iter()
-            .map(|x| (x.1 / temperature).exp())
-            .collect();
-            let exp_logprobs_sum = exp_logprobs.iter().sum::<f64>();
-            let probs: Vec<_> = exp_logprobs
-                .iter()
-                .map(|x| x / exp_logprobs_sum * LARGE_NUMBER)
-                .collect();
+        let (probs, pieces_with_indices, piece_to_original_index) =
+            self.subsample_cache.get_or_init(|| {
+                let exp_logprobs: Vec<f64> = self
+                    .original_vocab
+                    .iter()
+                    .map(|x| (x.1 / temperature).exp())
+                    .collect();
+                let exp_logprobs_sum = exp_logprobs.iter().sum::<f64>();
+                let probs: Vec<_> = exp_logprobs
+                    .iter()
+                    .map(|x| x / exp_logprobs_sum * LARGE_NUMBER)
+                    .collect();
 
-            let pieces_with_indices: Vec<_> = self.original_vocab.iter().enumerate().map(|x| (x.0, x.1.to_owned())).collect();
-            let piece_to_original_index: HashMap<_, _> = pieces_with_indices
-                .iter()
-                .map(|(i, (p, _))| (p.to_owned(), *i))
-                .collect();
+                let pieces_with_indices: Vec<_> = self
+                    .original_vocab
+                    .iter()
+                    .enumerate()
+                    .map(|x| (x.0, x.1.to_owned()))
+                    .collect();
+                let piece_to_original_index: HashMap<_, _> = pieces_with_indices
+                    .iter()
+                    .map(|(i, (p, _))| (p.to_owned(), *i))
+                    .collect();
 
-            (probs, pieces_with_indices, piece_to_original_index)
-        });
+                (probs, pieces_with_indices, piece_to_original_index)
+            });
 
         // sampling is wrong (samples low prob. too much) without the large multiplier
         // maybe f64 imprecisions?
@@ -441,15 +487,17 @@ impl Unigram {
             .zip(add_pieces_ids.iter())
             .sorted_by_key(|x| x.1)
         {
-            let original_index = piece_to_original_index
-                .get(piece)
-                .cloned();
+            let original_index = piece_to_original_index.get(piece).cloned();
 
-            self.vocab.insert(*index, (piece.clone(), original_index.map_or(0.0, |i| self.original_vocab[i].1)));
-            self.original_indices.insert(
+            self.vocab.insert(
                 *index,
-                original_index.unwrap_or(usize::MAX),
+                (
+                    piece.clone(),
+                    original_index.map_or(0.0, |i| self.original_vocab[i].1),
+                ),
             );
+            self.original_indices
+                .insert(*index, original_index.unwrap_or(usize::MAX));
         }
 
         // this is problematic :|
