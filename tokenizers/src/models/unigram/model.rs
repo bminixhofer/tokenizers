@@ -14,11 +14,11 @@ use crate::{
     OffsetReferential, OffsetType, PreTokenizedString, PreTokenizer,
 };
 
+use std::collections::VecDeque;
 use std::collections::{HashMap, HashSet};
 use std::convert::TryInto;
 use std::fs::read_to_string;
 use std::path::{Path, PathBuf};
-use std::collections::VecDeque;
 
 type TokenMap = HashMap<String, u32>;
 type Vocab = Vec<(String, f64)>;
@@ -47,7 +47,8 @@ pub struct Unigram {
         HashMap<String, usize>,
     )>,
 
-    seed_cache: VecDeque<HashMap<String, f64>>
+    seed_cache: VecDeque<HashMap<String, u32>>,
+    substr_index: HashMap<String, u32>,
 }
 impl PartialEq for Unigram {
     fn eq(&self, other: &Self) -> bool {
@@ -76,6 +77,7 @@ impl Clone for Unigram {
             original_indices: self.original_indices.clone(),
             subsample_cache: once_cell::sync::OnceCell::new(),
             seed_cache: VecDeque::new(),
+            substr_index: HashMap::new(),
         }
     }
 }
@@ -167,6 +169,7 @@ impl Unigram {
             original_vocab: vocab,
             subsample_cache: once_cell::sync::OnceCell::new(),
             seed_cache: VecDeque::new(),
+            substr_index: HashMap::new(),
         })
     }
 
@@ -339,10 +342,10 @@ impl Unigram {
             })
             .collect();
 
-        let mut substr_indices: Vec<HashMap<String, f64>> = vec![];
+        let mut substr_indices: Vec<HashMap<String, u32>> = vec![];
 
         for (pretokenized, cumulative_byte_length, n) in data.iter() {
-            let mut one_substr_index: HashMap<&str, f64> = HashMap::new();
+            let mut one_substr_index: HashMap<&str, u32> = HashMap::new();
 
             for (i, (pretoken, offsets, _)) in pretokenized
                 .get_splits(OffsetReferential::Original, OffsetType::Char)
@@ -377,7 +380,7 @@ impl Unigram {
                         }
 
                         let freq = *n;
-                        let score = (freq * token.len() as u32) as f64;
+                        let score = freq * token.len() as u32;
 
                         one_substr_index
                             .entry(token)
@@ -387,18 +390,30 @@ impl Unigram {
                 }
             }
 
-            substr_indices.push(one_substr_index.into_iter().map(|(key, value)| (key.to_string(), value)).collect::<HashMap<_, _>>());
+            substr_indices.push(
+                one_substr_index
+                    .into_iter()
+                    .map(|(key, value)| (key.to_string(), value))
+                    .collect::<HashMap<_, _>>(),
+            );
         }
 
-        let mut substr_index: HashMap<String, f64> = HashMap::new();
-
         for _ in 0..substr_indices.len() {
-            self.seed_cache.pop_back();
+            if let Some(one_substr_index) = self.seed_cache.pop_back() {
+                for (key, value) in one_substr_index.iter() {
+                    self.substr_index
+                        .entry(key.to_string())
+                        .and_modify(|e| *e -= *value);
+                    if *self.substr_index.get(key).unwrap() == 0 {
+                        self.substr_index.remove(key);
+                    }
+                }
+            }
         }
 
         for one_substr_index in substr_indices {
             for (key, value) in one_substr_index.iter() {
-                substr_index
+                self.substr_index
                     .entry(key.to_string())
                     .and_modify(|e| *e += *value)
                     .or_insert(*value);
@@ -407,29 +422,29 @@ impl Unigram {
             self.seed_cache.push_front(one_substr_index);
         }
 
-        for one_substr_index in self.seed_cache.iter() {
-            for (key, value) in one_substr_index.iter() {
-                substr_index
-                    .entry(key.to_string())
-                    .and_modify(|e| *e += *value)
-                    .or_insert(*value);
-            }
-        }
-
-        let score_sum = substr_index.iter().map(|x| x.1).sum::<f64>();
-        let min_score = substr_index.iter().fold(f64::INFINITY, |a, b| a.min(*b.1)) as f64;
+        let score_sum = self.substr_index.iter().map(|x| x.1).sum::<u32>() as f64;
+        let min_score = self.substr_index.iter().fold(u32::MAX, |a, b| a.min(*b.1)) as f64;
         let min_prob = min_score / score_sum;
 
-        // // Fill seed_sentencepieces
+        // Fill seed_sentencepieces
         for character in crate::pre_tokenizers::byte_level::ByteLevel::alphabet() {
             let string = character.to_string();
-            let logprob =
-                (substr_index.get(string.as_str()).unwrap_or(&min_score) / score_sum).ln();
+            let logprob = (self
+                .substr_index
+                .get(string.as_str())
+                .map(|x| (*x) as f64)
+                .unwrap_or(min_score)
+                / score_sum)
+                .ln();
 
             seed_sentencepieces.push((string, logprob));
         }
 
-        let mut substr_index = substr_index.into_iter().collect::<Vec<_>>();
+        let mut substr_index = self
+            .substr_index
+            .iter()
+            .map(|(x, v)| (x.to_string(), (*v) as f64))
+            .collect::<Vec<_>>();
         let mut rng = rand::thread_rng();
         let normal = Normal::new(0.0, noise_std).unwrap();
 
