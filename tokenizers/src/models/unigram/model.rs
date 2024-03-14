@@ -314,77 +314,82 @@ impl Unigram {
         stride: usize,
         noise_std: f64,
     ) -> Vec<(String, f64)> {
-        let mut sentences: Vec<(Vec<char>, u32)> =
-            map.iter().map(|(s, i)| (s.chars().collect(), *i)).collect();
-
         let mut seed_sentencepieces: Vec<(String, f64)> = vec![];
-        let mut substr_index: HashMap<String, f64> = HashMap::new();
+        let pre_tokenizer = &crate::pre_tokenizers::byte_level::ByteLevel::new(true, true, true);
 
-        for (sentence, n) in sentences.iter_mut() {
-            sentence.insert(0, ' ');
+        let data: Vec<(PreTokenizedString, Vec<usize>, u32)> = map
+            .into_iter()
+            .map(|(sentence, n)| {
+                let mut pretokenized: PreTokenizedString = sentence.clone().into();
+                pre_tokenizer.pre_tokenize(&mut pretokenized).unwrap();
 
-            let cumulative_byte_length: Vec<_> = sentence
-                .iter()
-                .scan(0, |acc, x| {
-                    *acc += x.len_utf8();
-                    Some(*acc)
-                })
-                .collect();
-
-            for i in (0..sentence.len()).step_by(stride) {
-                let byte_start = if i == 0 {
-                    0
-                } else {
-                    cumulative_byte_length[i - 1]
-                };
-                let j = cumulative_byte_length
-                    .iter()
-                    .position(|x| *x >= byte_start + max_length)
-                    .unwrap_or(sentence.len());
-                let mut buffer: [u8; 4] = [0; 4];
-
-                let pretok = sentence[i..j]
-                    .iter()
-                    .flat_map(|c| {
-                        let byte_str = c.encode_utf8(&mut buffer).to_string();
-
-                        byte_str
-                            .into_bytes()
-                            .into_iter()
-                            .map(|b| crate::pre_tokenizers::byte_level::BYTES_CHAR[&b])
+                let cumulative_byte_length: Vec<_> = sentence
+                    .chars()
+                    .scan(0, |acc, x| {
+                        *acc += x.len_utf8();
+                        Some(*acc)
                     })
-                    .collect::<String>();
+                    .collect();
+                (pretokenized, cumulative_byte_length, n)
+            })
+            .collect();
 
-                for k in 1..max_length {
-                    if k > pretok.chars().count() {
-                        break;
+        let mut substr_index: HashMap<&str, f64> = HashMap::new();
+
+        for (pretokenized, cumulative_byte_length, n) in data.iter() {
+            for (i, (pretoken, offsets, _)) in pretokenized
+                .get_splits(OffsetReferential::Original, OffsetType::Char)
+                .iter()
+                .enumerate()
+            {
+                let mut byte_offsets: Vec<_> = cumulative_byte_length[offsets.0..offsets.1]
+                    .iter()
+                    .map(|x| x - cumulative_byte_length[offsets.0] + usize::from(i == 0))
+                    .collect();
+                if i == 0 {
+                    byte_offsets.insert(0, 0);
+                }
+
+                let pretoken_char_offsets: Vec<_> = pretoken.char_indices().collect();
+
+                for i in byte_offsets.iter().step_by(stride) {
+                    for k in 1..max_length {
+                        if i + k > pretoken_char_offsets.len() {
+                            break;
+                        }
+                        let start = pretoken_char_offsets[*i].0;
+                        let end = if i + k == pretoken_char_offsets.len() {
+                            pretoken.len()
+                        } else {
+                            pretoken_char_offsets[*i + k].0
+                        };
+                        let token = &pretoken[start..end];
+
+                        if token.is_empty() {
+                            continue;
+                        }
+
+                        let freq = *n;
+                        let score = (freq * token.len() as u32) as f64;
+
+                        substr_index
+                            .entry(token)
+                            .and_modify(|e| *e += score)
+                            .or_insert(score);
                     }
-                    let token = pretok.chars().take(k).collect::<String>();
-                    if token.is_empty() {
-                        continue;
-                    }
-
-                    let freq = *n;
-                    let score = (freq * token.len() as u32) as f64;
-
-                    substr_index
-                        .entry(token)
-                        .and_modify(|e| *e += score)
-                        .or_insert(score);
                 }
             }
         }
-
-        // println!("Filling & sorting...");
 
         let score_sum = substr_index.iter().map(|x| x.1).sum::<f64>();
         let min_score = substr_index.iter().fold(f64::INFINITY, |a, b| a.min(*b.1)) as f64;
         let min_prob = min_score / score_sum;
 
-        // Fill seed_sentencepieces
-        for character in crate::pre_tokenizers::byte_level::BYTES_CHAR.values() {
+        // // Fill seed_sentencepieces
+        for character in crate::pre_tokenizers::byte_level::ByteLevel::alphabet() {
             let string = character.to_string();
-            let logprob = (substr_index.get(&string).unwrap_or(&min_score) / score_sum).ln();
+            let logprob =
+                (substr_index.get(string.as_str()).unwrap_or(&min_score) / score_sum).ln();
 
             seed_sentencepieces.push((string, logprob));
         }
@@ -406,7 +411,7 @@ impl Unigram {
                 // already added
                 continue;
             }
-            seed_sentencepieces.push((string, score));
+            seed_sentencepieces.push((string.into(), score));
             if seed_sentencepieces.len() >= seed_size {
                 break;
             }
