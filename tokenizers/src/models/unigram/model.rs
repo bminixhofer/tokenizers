@@ -18,6 +18,7 @@ use std::collections::{HashMap, HashSet};
 use std::convert::TryInto;
 use std::fs::read_to_string;
 use std::path::{Path, PathBuf};
+use std::collections::VecDeque;
 
 type TokenMap = HashMap<String, u32>;
 type Vocab = Vec<(String, f64)>;
@@ -45,6 +46,8 @@ pub struct Unigram {
         Vec<(usize, (String, f64))>,
         HashMap<String, usize>,
     )>,
+
+    seed_cache: VecDeque<HashMap<String, f64>>
 }
 impl PartialEq for Unigram {
     fn eq(&self, other: &Self) -> bool {
@@ -72,6 +75,7 @@ impl Clone for Unigram {
             original_vocab: self.original_vocab.clone(),
             original_indices: self.original_indices.clone(),
             subsample_cache: once_cell::sync::OnceCell::new(),
+            seed_cache: VecDeque::new(),
         }
     }
 }
@@ -162,6 +166,7 @@ impl Unigram {
             original_indices: (0..vocab.len()).collect(),
             original_vocab: vocab,
             subsample_cache: once_cell::sync::OnceCell::new(),
+            seed_cache: VecDeque::new(),
         })
     }
 
@@ -307,7 +312,7 @@ impl Unigram {
     }
 
     pub fn make_seed_sentence_pieces(
-        &self,
+        &mut self,
         map: HashMap<String, u32>,
         seed_size: usize,
         max_length: usize,
@@ -334,9 +339,11 @@ impl Unigram {
             })
             .collect();
 
-        let mut substr_index: HashMap<&str, f64> = HashMap::new();
+        let mut substr_indices: Vec<HashMap<String, f64>> = vec![];
 
         for (pretokenized, cumulative_byte_length, n) in data.iter() {
+            let mut one_substr_index: HashMap<&str, f64> = HashMap::new();
+
             for (i, (pretoken, offsets, _)) in pretokenized
                 .get_splits(OffsetReferential::Original, OffsetType::Char)
                 .iter()
@@ -372,12 +379,40 @@ impl Unigram {
                         let freq = *n;
                         let score = (freq * token.len() as u32) as f64;
 
-                        substr_index
+                        one_substr_index
                             .entry(token)
                             .and_modify(|e| *e += score)
                             .or_insert(score);
                     }
                 }
+            }
+
+            substr_indices.push(one_substr_index.into_iter().map(|(key, value)| (key.to_string(), value)).collect::<HashMap<_, _>>());
+        }
+
+        let mut substr_index: HashMap<String, f64> = HashMap::new();
+
+        for _ in 0..substr_indices.len() {
+            self.seed_cache.pop_back();
+        }
+
+        for one_substr_index in substr_indices {
+            for (key, value) in one_substr_index.iter() {
+                substr_index
+                    .entry(key.to_string())
+                    .and_modify(|e| *e += *value)
+                    .or_insert(*value);
+            }
+
+            self.seed_cache.push_front(one_substr_index);
+        }
+
+        for one_substr_index in self.seed_cache.iter() {
+            for (key, value) in one_substr_index.iter() {
+                substr_index
+                    .entry(key.to_string())
+                    .and_modify(|e| *e += *value)
+                    .or_insert(*value);
             }
         }
 

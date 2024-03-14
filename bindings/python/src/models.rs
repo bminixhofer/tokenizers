@@ -956,9 +956,9 @@ impl PyUnigram {
         stride: Option<usize>,
         noise_std: Option<f64>,
     ) -> PyResult<Vec<(String, f64)>> {
-        let model: std::sync::RwLockReadGuard<'_, ModelWrapper> =
-            self_.as_ref().model.read().unwrap();
-        if let ModelWrapper::Unigram(ref unigram) = *model {
+        let mut model: std::sync::RwLockWriteGuard<'_, ModelWrapper> =
+            self_.as_ref().model.write().unwrap();
+        if let ModelWrapper::Unigram(ref mut unigram) = *model {
             Ok(unigram.make_seed_sentence_pieces(
                 map,
                 seed_size,
