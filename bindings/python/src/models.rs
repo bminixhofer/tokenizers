@@ -955,6 +955,7 @@ impl PyUnigram {
         max_length: usize,
         stride: Option<usize>,
         noise_std: Option<f64>,
+        pop_prev: Option<bool>,
     ) -> PyResult<Vec<(String, f64)>> {
         let mut model: std::sync::RwLockWriteGuard<'_, ModelWrapper> =
             self_.as_ref().model.write().unwrap();
@@ -965,6 +966,7 @@ impl PyUnigram {
                 max_length,
                 stride.unwrap_or(1),
                 noise_std.unwrap_or(0.0),
+                pop_prev.unwrap_or(true),
             ))
         } else {
             unreachable!()
