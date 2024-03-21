@@ -394,56 +394,60 @@ impl Unigram {
 
         self.seed_cache.push_front(current_substr_index.into_iter().map(|(k, v)| (k.to_string(), v)).collect());
 
-        let substr_index: HashMap<String, u32> = self
-            .seed_cache
-            .iter()
-            .map(|x| x.iter())
-            .flatten()
-            .fold(HashMap::new(), |mut acc, (k, v)| {
-                acc.entry(k.to_string()).and_modify(|e| *e += *v).or_insert(*v);
-                acc
-            });
+        if pop_prev {
+            let substr_index: HashMap<&str, u32> = self
+                .seed_cache
+                .iter()
+                .map(|x| x.iter())
+                .flatten()
+                .fold(HashMap::new(), |mut acc, (k, v)| {
+                    acc.entry(k.as_str()).and_modify(|e| *e += *v).or_insert(*v);
+                    acc
+                });
 
-        let score_sum = substr_index.iter().map(|x| x.1).sum::<u32>() as f64;
-        let min_score = substr_index.iter().fold(u32::MAX, |a, b| a.min(*b.1)) as f64;
-        let min_prob = min_score / score_sum;
+            let score_sum = substr_index.iter().map(|x| x.1).sum::<u32>() as f64;
+            let min_score = substr_index.iter().fold(u32::MAX, |a, b| a.min(*b.1)) as f64;
+            let min_prob = min_score / score_sum;
 
-        // Fill seed_sentencepieces
-        for character in crate::pre_tokenizers::byte_level::ByteLevel::alphabet() {
-            let string = character.to_string();
-            let logprob = (substr_index
-                .get(string.as_str())
-                .map(|x| (*x) as f64)
-                .unwrap_or(min_score)
-                / score_sum)
-                .ln();
+            // Fill seed_sentencepieces
+            for character in crate::pre_tokenizers::byte_level::ByteLevel::alphabet() {
+                let string = character.to_string();
+                let logprob = (substr_index
+                    .get(string.as_str())
+                    .map(|x| (*x) as f64)
+                    .unwrap_or(min_score)
+                    / score_sum)
+                    .ln();
 
-            seed_sentencepieces.push((string, logprob));
-        }
-
-        let mut substr_index = substr_index
-            .iter()
-            .map(|(x, v)| (x.to_string(), (*v) as f64))
-            .collect::<Vec<_>>();
-        let mut rng = rand::thread_rng();
-        let normal = Normal::new(0.0, noise_std).unwrap();
-
-        substr_index.iter_mut().for_each(|x| {
-            let noised = x.1 as f64 / score_sum as f64 + normal.sample(&mut rng);
-            x.1 = f64::max(noised, min_prob).ln();
-        });
-
-        // sort by decreasing score
-        substr_index.sort_by(|a, b| b.1.partial_cmp(&a.1).unwrap());
-
-        for (string, score) in substr_index {
-            if string.chars().count() == 1 {
-                // already added
-                continue;
+                seed_sentencepieces.push((string, logprob));
             }
-            seed_sentencepieces.push((string.into(), score));
-            if seed_sentencepieces.len() >= seed_size {
-                break;
+
+            let mut rng = rand::thread_rng();
+            let normal = Normal::new(0.0, noise_std).unwrap();
+            let mut substr_index = substr_index
+                .into_iter()
+                .filter_map(|(x, v)| {
+                    let noised = v as f64 / score_sum as f64 + normal.sample(&mut rng);
+                    if noised < min_prob {
+                        None
+                    } else {
+                        Some((x, noised.ln()))
+                    }
+                })
+                .collect::<Vec<_>>();
+
+            // sort by decreasing score
+            substr_index.sort_by(|a, b| b.1.partial_cmp(&a.1).unwrap());
+
+            for (string, score) in substr_index {
+                if string.chars().count() == 1 {
+                    // already added
+                    continue;
+                }
+                seed_sentencepieces.push((string.into(), score));
+                if seed_sentencepieces.len() >= seed_size {
+                    break;
+                }
             }
         }
         seed_sentencepieces
