@@ -408,18 +408,12 @@ impl Unigram {
             let score_sum = substr_index.iter().map(|x| x.1).sum::<u32>() as f64;
             let min_score = substr_index.iter().fold(u32::MAX, |a, b| a.min(*b.1)) as f64;
             let min_prob = min_score / score_sum;
+            let min_log_prob = (min_score / score_sum).ln();
 
             // Fill seed_sentencepieces
             for character in crate::pre_tokenizers::byte_level::ByteLevel::alphabet() {
                 let string = character.to_string();
-                let logprob = (substr_index
-                    .get(string.as_str())
-                    .map(|x| (*x) as f64)
-                    .unwrap_or(min_score)
-                    / score_sum)
-                    .ln();
-
-                seed_sentencepieces.push((string, logprob));
+                seed_sentencepieces.push((string, min_log_prob));
             }
 
             let mut rng = rand::thread_rng();
@@ -439,8 +433,18 @@ impl Unigram {
             // sort by decreasing score
             substr_index.sort_by(|a, b| b.1.partial_cmp(&a.1).unwrap());
 
+            let extra_whitespace_chars = vec!['Ġ', 'Ċ', 'ĉ'];
+
+            for c in extra_whitespace_chars.iter() {
+                for i in 2..=max_length { // length 1 already added through ByteLevel::alphabet()
+                    let string = c.to_string().repeat(i);
+
+                    seed_sentencepieces.push((string, min_log_prob));
+                }
+            }
+
             for (string, score) in substr_index {
-                if string.chars().count() == 1 {
+                if string.chars().count() == 1 || string.chars().all(|c| extra_whitespace_chars.contains(&c)) {
                     // already added
                     continue;
                 }
