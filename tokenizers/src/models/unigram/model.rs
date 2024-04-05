@@ -343,7 +343,6 @@ impl Unigram {
         let mut current_substr_index: HashMap<&str, u32> = HashMap::new();
 
         for (pretokenized, cumulative_byte_length, n) in data.iter() {
-
             for (i, (pretoken, offsets, _)) in pretokenized
                 .get_splits(OffsetReferential::Original, OffsetType::Char)
                 .iter()
@@ -392,18 +391,22 @@ impl Unigram {
             self.seed_cache.pop_back();
         }
 
-        self.seed_cache.push_front(current_substr_index.into_iter().map(|(k, v)| (k.to_string(), v)).collect());
+        self.seed_cache.push_front(
+            current_substr_index
+                .into_iter()
+                .map(|(k, v)| (k.to_string(), v))
+                .collect(),
+        );
 
         if pop_prev {
-            let substr_index: HashMap<&str, u32> = self
-                .seed_cache
-                .iter()
-                .map(|x| x.iter())
-                .flatten()
-                .fold(HashMap::new(), |mut acc, (k, v)| {
-                    acc.entry(k.as_str()).and_modify(|e| *e += *v).or_insert(*v);
-                    acc
-                });
+            let substr_index: HashMap<&str, u32> =
+                self.seed_cache.iter().map(|x| x.iter()).flatten().fold(
+                    HashMap::new(),
+                    |mut acc, (k, v)| {
+                        acc.entry(k.as_str()).and_modify(|e| *e += *v).or_insert(*v);
+                        acc
+                    },
+                );
 
             let score_sum = substr_index.iter().map(|x| x.1).sum::<u32>() as f64;
             let min_score = substr_index.iter().fold(u32::MAX, |a, b| a.min(*b.1)) as f64;
@@ -433,18 +436,27 @@ impl Unigram {
             // sort by decreasing score
             substr_index.sort_by(|a, b| b.1.partial_cmp(&a.1).unwrap());
 
-            let extra_whitespace_chars = vec!['Ġ', 'Ċ', 'ĉ'];
+            let whitespace_chars = vec!['Ġ'];
+            let extra_whitespace_chars = vec!['Ċ', 'ĉ'];
 
-            for c in extra_whitespace_chars.iter() {
-                for i in 2..=max_length { // length 1 already added through ByteLevel::alphabet()
-                    let string = c.to_string().repeat(i);
+            for c1 in extra_whitespace_chars.iter().chain(whitespace_chars.iter()) {
+                // length 1 already added through ByteLevel::alphabet()
+                for i in 1..max_length {
+                    for c2 in extra_whitespace_chars.iter().chain(whitespace_chars.iter()) {
+                        let string = c2.to_string() + c1.to_string().repeat(i).as_str();
 
-                    seed_sentencepieces.push((string, min_log_prob));
+                        seed_sentencepieces.push((string, 0.0));
+                    }
                 }
             }
 
             for (string, score) in substr_index {
-                if string.chars().count() == 1 || string.chars().all(|c| extra_whitespace_chars.contains(&c)) {
+                if string.chars().count() == 1
+                    || string.chars().any(|c| extra_whitespace_chars.contains(&c))
+                    || string.chars().all(|c| {
+                        extra_whitespace_chars.contains(&c) || whitespace_chars.contains(&c)
+                    })
+                {
                     // already added
                     continue;
                 }
