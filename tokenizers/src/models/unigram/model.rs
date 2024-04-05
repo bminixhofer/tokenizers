@@ -436,13 +436,12 @@ impl Unigram {
             // sort by decreasing score
             substr_index.sort_by(|a, b| b.1.partial_cmp(&a.1).unwrap());
 
-            let whitespace_chars = vec!['Ġ'];
-            let extra_whitespace_chars = vec!['Ċ', 'ĉ'];
+            let extra_whitespace_chars = ['Ġ', 'Ċ', 'ĉ'];
 
-            for c1 in extra_whitespace_chars.iter().chain(whitespace_chars.iter()) {
+            for c1 in extra_whitespace_chars.iter() {
                 // length 1 already added through ByteLevel::alphabet()
                 for i in 1..max_length {
-                    for c2 in extra_whitespace_chars.iter().chain(whitespace_chars.iter()) {
+                    for c2 in extra_whitespace_chars.iter() {
                         let string = c2.to_string() + c1.to_string().repeat(i).as_str();
 
                         seed_sentencepieces.push((string, 0.0));
@@ -452,10 +451,11 @@ impl Unigram {
 
             for (string, score) in substr_index {
                 if string.chars().count() == 1
-                    || string.chars().any(|c| extra_whitespace_chars.contains(&c))
-                    || string.chars().all(|c| {
-                        extra_whitespace_chars.contains(&c) || whitespace_chars.contains(&c)
-                    })
+                    || string
+                        .chars()
+                        .map(|c| extra_whitespace_chars.contains(&c) as usize)
+                        .sum::<usize>()
+                        >= 2
                 {
                     // already added
                     continue;
