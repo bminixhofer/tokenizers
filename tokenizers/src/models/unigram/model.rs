@@ -410,7 +410,6 @@ impl Unigram {
 
             let score_sum = substr_index.iter().map(|x| x.1).sum::<u32>() as f64;
             let min_score = substr_index.iter().fold(u32::MAX, |a, b| a.min(*b.1)) as f64;
-            let min_prob = min_score / score_sum;
             let min_log_prob = (min_score / score_sum).ln();
 
             // Fill seed_sentencepieces
@@ -423,12 +422,13 @@ impl Unigram {
             let normal = Normal::new(0.0, noise_std).unwrap();
             let mut substr_index = substr_index
                 .into_iter()
-                .filter_map(|(x, v)| {
+                .map(|(x, v)| {
                     let noised = v as f64 / score_sum as f64 + normal.sample(&mut rng);
-                    if noised < min_prob {
-                        None
+
+                    if noised > 0.0 {
+                        (x, noised.ln())
                     } else {
-                        Some((x, noised.ln()))
+                        (x, -100000.0)
                     }
                 })
                 .collect::<Vec<_>>();
