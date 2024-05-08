@@ -319,6 +319,7 @@ impl Unigram {
         stride: usize,
         noise_std: f64,
         pop_prev: bool,
+        push_current: bool,
     ) -> Vec<(String, f64)> {
         let mut seed_sentencepieces: Vec<(String, f64)> = vec![];
         let pre_tokenizer = &crate::pre_tokenizers::byte_level::ByteLevel::new(true, true, true);
@@ -387,9 +388,11 @@ impl Unigram {
             }
         }
 
-        if pop_prev {
-            self.seed_cache.pop_back();
-        }
+        let maybe_prev = if pop_prev {
+            self.seed_cache.pop_back()
+        } else {
+            None
+        };
 
         self.seed_cache.push_front(
             current_substr_index
@@ -466,6 +469,13 @@ impl Unigram {
                 }
             }
         }
+        if !push_current {
+            self.seed_cache.pop_front();
+            if let Some(prev) = maybe_prev {
+                self.seed_cache.push_back(prev);
+            }
+        }
+
         seed_sentencepieces
     }
 
