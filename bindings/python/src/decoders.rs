@@ -68,6 +68,10 @@ impl Decoder for PyDecoder {
     fn decode_chain(&self, tokens: Vec<String>) -> tk::Result<Vec<String>> {
         self.decoder.decode_chain(tokens)
     }
+
+    fn decode_single_token_to_bytes(&self, token: &str) -> tk::Result<Vec<u8>> {
+        self.decoder.decode_single_token_to_bytes(token)
+    }
 }
 
 #[pymethods]
@@ -575,6 +579,18 @@ impl Decoder for PyDecoderWrapper {
         match self {
             PyDecoderWrapper::Wrapped(inner) => inner.read().unwrap().decode_chain(tokens),
             PyDecoderWrapper::Custom(inner) => inner.read().unwrap().decode_chain(tokens),
+        }
+    }
+
+    fn decode_single_token_to_bytes(&self, token: &str) -> tk::Result<Vec<u8>> {
+        match self {
+            PyDecoderWrapper::Wrapped(inner) => {
+                inner.read().unwrap().decode_single_token_to_bytes(token)
+            }
+            PyDecoderWrapper::Custom(inner) => {
+                let decoded = inner.read().unwrap().decode(vec![token.to_string()])?;
+                Ok(decoded.into_bytes())
+            }
         }
     }
 }

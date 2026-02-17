@@ -156,6 +156,15 @@ pub trait Decoder {
         Ok(results.join(""))
     }
     fn decode_chain(&self, tokens: Vec<String>) -> Result<Vec<String>>;
+
+    /// Decode a single token string to its raw bytes, bypassing lossy String conversion.
+    ///
+    /// The default implementation runs the normal `decode` and returns UTF-8 bytes.
+    /// Byte-aware decoders (ByteLevel, ByteFallback) override this to preserve raw bytes.
+    fn decode_single_token_to_bytes(&self, token: &str) -> Result<Vec<u8>> {
+        let decoded = self.decode(vec![token.to_string()])?;
+        Ok(decoded.into_bytes())
+    }
 }
 
 /// A `Trainer` has the responsibility to train a model. We feed it with lines/sentences
@@ -702,6 +711,33 @@ where
         self.added_vocabulary
             .simple_id_to_token(id)
             .or_else(|| self.model.id_to_token(id))
+    }
+
+    /// Returns the raw bytes corresponding to a single token ID.
+    ///
+    /// The bytes are post-normalization — whatever the token decodes to through the decoder
+    /// pipeline. This bypasses the lossy `String` conversion that happens in `decode`, so
+    /// partial UTF-8 bytes (e.g. from ByteLevel or ByteFallback decoders) are preserved.
+    pub fn id_to_bytes(&self, id: u32) -> Result<Vec<u8>> {
+        let token = self
+            .id_to_token(id)
+            .ok_or_else(|| format!("Token ID {} not found in vocabulary", id))?;
+        if let Some(decoder) = &self.decoder {
+            decoder.decode_single_token_to_bytes(&token)
+        } else {
+            Ok(token.into_bytes())
+        }
+    }
+
+    /// Returns a mapping from token ID to raw bytes for every token in the vocabulary.
+    ///
+    /// See [`id_to_bytes`](Self::id_to_bytes) for details on the byte representation.
+    pub fn get_vocab_bytes(&self, with_added_tokens: bool) -> HashMap<u32, Vec<u8>> {
+        let vocab = self.get_vocab(with_added_tokens);
+        vocab
+            .into_iter()
+            .filter_map(|(_, id)| self.id_to_bytes(id).ok().map(|bytes| (id, bytes)))
+            .collect()
     }
 
     /// set the added vocab's splitting scheme

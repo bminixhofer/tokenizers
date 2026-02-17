@@ -802,6 +802,24 @@ impl PyTokenizer {
         self.tokenizer.get_vocab(with_added_tokens)
     }
 
+    /// Get a mapping from token ID to raw bytes for every token in the vocabulary.
+    ///
+    /// The bytes returned are post-normalization — whatever each token decodes to
+    /// through the decoder pipeline. This preserves raw byte information that would
+    /// be lost through the standard :meth:`~tokenizers.Tokenizer.decode` method.
+    ///
+    /// Args:
+    ///     with_added_tokens (:obj:`bool`, defaults to :obj:`True`):
+    ///         Whether to include the added tokens
+    ///
+    /// Returns:
+    ///     :obj:`Dict[int, bytes]`: A mapping from token ID to raw bytes
+    #[pyo3(signature = (with_added_tokens = true) -> "dict[int, bytes]")]
+    #[pyo3(text_signature = "(self, with_added_tokens=True)")]
+    fn get_vocab_bytes(&self, with_added_tokens: bool) -> HashMap<u32, Vec<u8>> {
+        self.tokenizer.get_vocab_bytes(with_added_tokens)
+    }
+
     /// Get the underlying vocabulary
     ///
     /// Returns:
@@ -1528,6 +1546,26 @@ impl PyTokenizer {
     #[pyo3(signature = (id) -> "str | None", text_signature = "(self, id)")]
     fn id_to_token(&self, id: u32) -> Option<String> {
         self.tokenizer.id_to_token(id)
+    }
+
+    /// Returns the raw bytes corresponding to a single token ID.
+    ///
+    /// The bytes returned are post-normalization — whatever the token decodes to
+    /// through the decoder pipeline. This preserves raw byte information that would
+    /// be lost through the standard :meth:`~tokenizers.Tokenizer.decode` method
+    /// (e.g. partial UTF-8 bytes from ByteLevel or ByteFallback decoders).
+    ///
+    /// Args:
+    ///     id (:obj:`int`):
+    ///         The token id to convert to bytes
+    ///
+    /// Returns:
+    ///     :obj:`bytes`: The raw bytes corresponding to the token
+    #[pyo3(signature = (id) -> "bytes", text_signature = "(self, id)")]
+    fn id_to_bytes(&self, id: u32) -> PyResult<Vec<u8>> {
+        self.tokenizer.id_to_bytes(id).map_err(|e| {
+            exceptions::PyValueError::new_err(e.to_string())
+        })
     }
 
     /// Modifies the tokenizer in order to use or not the special tokens
