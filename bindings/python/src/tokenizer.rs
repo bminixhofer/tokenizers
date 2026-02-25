@@ -484,26 +484,14 @@ type Tokenizer = TokenizerImpl<PyModel, PyNormalizer, PyPreTokenizer, PyPostProc
 ///
 #[pyclass(dict, module = "tokenizers", name = "Tokenizer")]
 #[derive(Clone, Serialize)]
+#[serde(transparent)]
 pub struct PyTokenizer {
     pub(crate) tokenizer: Tokenizer,
-    #[serde(skip)]
-    batch_cache: Option<BatchCache>,
-}
-
-#[derive(Clone)]
-struct BatchCache {
-    trie: tk::utils::byte_trie::ByteTrie,
-    metadata: tk::utils::byte_trie::BatchMetadata,
-    maxlen: usize,
-    noise_fraction: f32,
 }
 
 impl PyTokenizer {
     fn new(tokenizer: Tokenizer) -> Self {
-        PyTokenizer {
-            tokenizer,
-            batch_cache: None,
-        }
+        PyTokenizer { tokenizer }
     }
 
     fn from_model(model: PyModel) -> Self {
@@ -706,7 +694,7 @@ impl PyTokenizer {
                 "Cannot instantiate Tokenizer from buffer: {e}"
             ))
         })?;
-        Ok(Self { tokenizer, batch_cache: None })
+        Ok(Self { tokenizer })
     }
 
     /// Instantiate a new :class:`~tokenizers.Tokenizer` from an existing file on the
@@ -1879,107 +1867,6 @@ impl PyTokenizer {
     #[setter]
     fn set_decoder(&mut self, decoder: Option<PyRef<PyDecoder>>) {
         self.tokenizer.with_decoder(decoder.map(|d| d.clone()));
-    }
-
-    /// Get metadata needed to allocate arrays for :meth:`prepare_batch`.
-    ///
-    /// Args:
-    ///     maxlen (:obj:`int`, defaults to 128):
-    ///         Maximum chunk length in bytes
-    ///
-    ///     noise_fraction (:obj:`float`, defaults to 0.0):
-    ///         Fraction of chunks to fill with noise paths (valid trie prefix +
-    ///         one invalid byte). Helps the model learn to recover from off-path
-    ///         states during autoregressive inference.
-    ///
-    /// Returns:
-    ///     :obj:`tuple[int, int, int]`: ``(num_chunks, total_len, num_tokens)``
-    #[pyo3(signature = (maxlen = 128, noise_fraction = 0.0) -> "tuple[int, int, int]")]
-    #[pyo3(text_signature = "(self, maxlen=128, noise_fraction=0.0)")]
-    fn prepare_batch_metadata(&mut self, maxlen: usize, noise_fraction: f32) -> PyResult<(usize, usize, usize)> {
-        use tk::utils::byte_trie;
-
-        let vocab = self.tokenizer.get_vocab_bytes(true);
-        let metadata = byte_trie::prepare_batch_metadata(&vocab, maxlen, noise_fraction)
-            .map_err(|e| exceptions::PyValueError::new_err(e))?;
-        let trie = byte_trie::ByteTrie::from_vocab(&vocab);
-        let result = (metadata.num_chunks, metadata.total_len, metadata.num_tokens);
-        self.batch_cache = Some(BatchCache {
-            trie,
-            metadata,
-            maxlen,
-            noise_fraction,
-        });
-        Ok(result)
-    }
-
-    /// Fill pre-allocated numpy arrays with batch data for all tokens in the vocabulary.
-    ///
-    /// Call :meth:`prepare_batch_metadata` first to get the sizes needed for allocation.
-    ///
-    /// Args:
-    ///     input_bytes (:obj:`numpy.ndarray`):
-    ///         ``[num_chunks, maxlen]`` uint8 array
-    ///     position_ids (:obj:`numpy.ndarray`):
-    ///         ``[num_chunks, maxlen]`` uint8 array
-    ///     edge_labels (:obj:`numpy.ndarray`):
-    ///         ``[num_chunks, maxlen, 256]`` bool array
-    ///     is_token_labels (:obj:`numpy.ndarray`):
-    ///         ``[num_chunks, maxlen]`` bool array
-    ///     attention_mask (:obj:`numpy.ndarray`):
-    ///         ``[num_chunks, maxlen]`` bool array
-    ///     segment_ids (:obj:`numpy.ndarray`):
-    ///         ``[num_chunks, maxlen]`` int32 array
-    ///     fill_true (:obj:`bool`):
-    ///         Whether to fill real token chunks (default ``True``)
-    ///     fill_noise (:obj:`bool`):
-    ///         Whether to fill noise chunks (default ``True``)
-    #[pyo3(signature = (input_bytes, position_ids, edge_labels, is_token_labels, attention_mask, segment_ids, fill_true=true, fill_noise=true) -> "None")]
-    #[pyo3(text_signature = "(self, input_bytes, position_ids, edge_labels, is_token_labels, attention_mask, segment_ids, fill_true=True, fill_noise=True)")]
-    fn prepare_batch<'py>(
-        &self,
-        input_bytes: &Bound<'py, numpy::PyArray2<u8>>,
-        position_ids: &Bound<'py, numpy::PyArray2<u8>>,
-        edge_labels: &Bound<'py, numpy::PyArray3<bool>>,
-        is_token_labels: &Bound<'py, numpy::PyArray2<bool>>,
-        attention_mask: &Bound<'py, numpy::PyArray2<bool>>,
-        segment_ids: &Bound<'py, numpy::PyArray2<i32>>,
-        fill_true: bool,
-        fill_noise: bool,
-    ) -> PyResult<()> {
-        use numpy::PyArrayMethods;
-        use tk::utils::byte_trie;
-
-        let cache = self.batch_cache.as_ref().ok_or_else(|| {
-            exceptions::PyRuntimeError::new_err(
-                "prepare_batch_metadata must be called before prepare_batch"
-            )
-        })?;
-
-        let mut input_bytes_rw = input_bytes.readwrite();
-        let mut position_ids_rw = position_ids.readwrite();
-        let mut edge_labels_rw = edge_labels.readwrite();
-        let mut is_token_labels_rw = is_token_labels.readwrite();
-        let mut attention_mask_rw = attention_mask.readwrite();
-        let mut segment_ids_rw = segment_ids.readwrite();
-
-        let ib = input_bytes_rw.as_slice_mut()
-            .map_err(|e| exceptions::PyValueError::new_err(format!("input_bytes: {e}")))?;
-        let pi = position_ids_rw.as_slice_mut()
-            .map_err(|e| exceptions::PyValueError::new_err(format!("position_ids: {e}")))?;
-        let el = edge_labels_rw.as_slice_mut()
-            .map_err(|e| exceptions::PyValueError::new_err(format!("edge_labels: {e}")))?;
-        let it = is_token_labels_rw.as_slice_mut()
-            .map_err(|e| exceptions::PyValueError::new_err(format!("is_token_labels: {e}")))?;
-        let am = attention_mask_rw.as_slice_mut()
-            .map_err(|e| exceptions::PyValueError::new_err(format!("attention_mask: {e}")))?;
-        let si = segment_ids_rw.as_slice_mut()
-            .map_err(|e| exceptions::PyValueError::new_err(format!("segment_ids: {e}")))?;
-
-        let mut rng = rand::rng();
-        byte_trie::fill_batch(&cache.trie, &cache.metadata, cache.maxlen, fill_true, fill_noise, &mut rng, ib, pi, el, it, am, si);
-
-        Ok(())
     }
 }
 
