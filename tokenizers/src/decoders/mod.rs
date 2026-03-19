@@ -190,8 +190,94 @@ impl Decoder for DecoderWrapper {
                     Ok(token.as_bytes().to_vec())
                 }
             }
-            Self::Sequence(_) => {
-                Err("decode_single_token_to_bytes is not supported for Sequence decoders".into())
+            Self::Sequence(seq) => {
+                // Support sequences containing ByteFallback plus text-transform
+                // decoders (Replace, Metaspace, Fuse, Strip).
+                //
+                // For a <0xHH> byte token, ByteFallback short-circuits to the raw
+                // byte — text transforms before it cannot produce <0xHH> patterns,
+                // and those after it are irrelevant for raw bytes.
+                //
+                // For non-byte tokens, we apply all text-transforming decoders in
+                // order (Replace, Metaspace) and return UTF-8 bytes.
+                // Fuse is a no-op for single tokens. Strip is position-dependent
+                // (operates on the fused result) so we skip it, same convention as
+                // Metaspace's leading-space behavior.
+                let decoders = seq.get_decoders();
+                let mut has_byte_fallback = false;
+
+                // First pass: validate the sequence and check for ByteFallback
+                for dec in decoders {
+                    match dec {
+                        DecoderWrapper::Replace(_)
+                        | DecoderWrapper::Metaspace(_)
+                        | DecoderWrapper::Fuse(_)
+                        | DecoderWrapper::Strip(_) => {}
+                        DecoderWrapper::ByteFallback(_) => {
+                            has_byte_fallback = true;
+                        }
+                        _ => {
+                            return Err(format!(
+                                "decode_single_token_to_bytes: unsupported decoder {:?} in Sequence",
+                                dec
+                            ).into());
+                        }
+                    }
+                }
+
+                if !has_byte_fallback {
+                    return Err("decode_single_token_to_bytes: Sequence has no ByteFallback".into());
+                }
+
+                // Apply text-transforming decoders before ByteFallback to the token
+                let mut token = token.to_string();
+                for dec in decoders {
+                    match dec {
+                        DecoderWrapper::Replace(r) => {
+                            let replaced = r.decode_chain(vec![token])?;
+                            token = replaced.into_iter().next().unwrap();
+                        }
+                        DecoderWrapper::ByteFallback(_) => break,
+                        _ => {}
+                    }
+                }
+
+                // ByteFallback: <0xHH> → raw byte, otherwise continue with
+                // text transforms after ByteFallback
+                if token.len() == 6 && token.starts_with("<0x") && token.ends_with('>') {
+                    let byte = u8::from_str_radix(&token[3..5], 16).map_err(|e| {
+                        Box::new(e) as Box<dyn std::error::Error + Send + Sync>
+                    })?;
+                    return Ok(vec![byte]);
+                }
+
+                // Apply text-transforming decoders after ByteFallback
+                let mut after = false;
+                for dec in decoders {
+                    if !after {
+                        if matches!(dec, DecoderWrapper::ByteFallback(_)) {
+                            after = true;
+                        }
+                        continue;
+                    }
+                    match dec {
+                        DecoderWrapper::Metaspace(ms) => {
+                            let replacement = ms.get_replacement();
+                            token = token
+                                .chars()
+                                .map(|c| if c == replacement { ' ' } else { c })
+                                .collect();
+                        }
+                        DecoderWrapper::Replace(r) => {
+                            let replaced = r.decode_chain(vec![token])?;
+                            token = replaced.into_iter().next().unwrap();
+                        }
+                        DecoderWrapper::Fuse(_) | DecoderWrapper::Strip(_) => {}
+                        _ => {}
+                    }
+                }
+
+                Ok(token.into_bytes())
             }
             Self::WordPiece(wp) => {
                 // Continuation token (e.g. "##a"): strip prefix → "a"
@@ -389,6 +475,48 @@ mod tests {
         // Plain token without ▁ → UTF-8 bytes unchanged
         let bytes = decoder.decode_single_token_to_bytes("world").unwrap();
         assert_eq!(bytes, b"world");
+    }
+
+    #[test]
+    fn sequence_replace_byte_fallback_fuse() {
+        use crate::Decoder;
+
+        // Target sequence 1: Replace("▁"→" "), ByteFallback, Fuse
+        let json = r#"{"type":"Sequence","decoders":[{"type":"Replace","pattern":{"String":"▁"},"content":" "},{"type":"ByteFallback"},{"type":"Fuse"}]}"#;
+        let decoder: DecoderWrapper = serde_json::from_str(json).unwrap();
+
+        // ▁hello → " hello" (Replace converts ▁ to space)
+        let bytes = decoder.decode_single_token_to_bytes("▁hello").unwrap();
+        assert_eq!(bytes, b" hello");
+
+        // Byte token → raw byte
+        let bytes = decoder.decode_single_token_to_bytes("<0xC3>").unwrap();
+        assert_eq!(bytes, vec![0xC3]);
+
+        // Plain token
+        let bytes = decoder.decode_single_token_to_bytes("world").unwrap();
+        assert_eq!(bytes, b"world");
+    }
+
+    #[test]
+    fn sequence_replace_byte_fallback_fuse_strip() {
+        use crate::Decoder;
+
+        // Target sequence 2: Replace("▁"→" "), ByteFallback, Fuse, Strip(" ", start=1, stop=0)
+        let json = r#"{"type":"Sequence","decoders":[{"type":"Replace","pattern":{"String":"▁"},"content":" "},{"type":"ByteFallback"},{"type":"Fuse"},{"type":"Strip","content":" ","start":1,"stop":0}]}"#;
+        let decoder: DecoderWrapper = serde_json::from_str(json).unwrap();
+
+        // ▁hello → " hello" (Strip is position-dependent, skipped for single tokens)
+        let bytes = decoder.decode_single_token_to_bytes("▁hello").unwrap();
+        assert_eq!(bytes, b" hello");
+
+        // Byte token → raw byte
+        let bytes = decoder.decode_single_token_to_bytes("<0xE5>").unwrap();
+        assert_eq!(bytes, vec![0xE5]);
+
+        // Plain token
+        let bytes = decoder.decode_single_token_to_bytes("hello").unwrap();
+        assert_eq!(bytes, b"hello");
     }
 
     #[test]
