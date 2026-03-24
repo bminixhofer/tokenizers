@@ -719,7 +719,21 @@ where
     /// pipeline. This bypasses the lossy `String` conversion that happens in `decode`, so
     /// partial UTF-8 bytes (e.g. from ByteLevel or ByteFallback decoders) are preserved.
     pub fn id_to_bytes(&self, id: u32) -> Result<Vec<u8>> {
+        // Added tokens are plain strings — their `content` is the literal surface form and
+        // should NOT go through the decoder. This holds even when an added token shares an
+        // ID with a model vocab entry (e.g. `<|endoftext|>` in GPT-2): the model's
+        // `id_to_token` may return an internally-encoded form (byte-level, etc.) that
+        // differs from the intended surface string, and `decode_single_token_to_bytes`
+        // can error on characters outside the decoder's expected alphabet.
+        // NOTE: we ignore normalized=False / normalized=True on AddedTokens here.
+        if let Some(token) = self.added_vocabulary.simple_id_to_token(id) {
+            return Ok(token.into_bytes());
+        }
+        // Model-only tokens are stored in the decoder's expected encoding (e.g.
+        // byte-encoded for ByteLevel), so they must go through the decoder to recover
+        // the raw bytes.
         let token = self
+            .model
             .id_to_token(id)
             .ok_or_else(|| format!("Token ID {} not found in vocabulary", id))?;
         if let Some(decoder) = &self.decoder {
