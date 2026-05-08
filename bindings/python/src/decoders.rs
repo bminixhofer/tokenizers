@@ -119,6 +119,27 @@ impl PyDecoder {
         ToPyResult(self.decoder.decode(tokens)).into()
     }
 
+    /// Decode a single token to its raw bytes (matches the per-token behavior
+    /// of :meth:`Tokenizer.id_to_bytes`). Useful when you need the
+    /// concatenation of per-token decodes rather than the chain-decoded
+    /// human-readable string.
+    ///
+    /// Args:
+    ///     token (:obj:`str`):
+    ///         The token to decode.
+    ///
+    /// Returns:
+    ///     :obj:`bytes`: The decoded bytes for this single token.
+    #[pyo3(text_signature = "(self, token)")]
+    fn decode_single_token_to_bytes<'py>(
+        &self,
+        py: Python<'py>,
+        token: &str,
+    ) -> PyResult<Bound<'py, PyBytes>> {
+        let bytes: Vec<u8> = ToPyResult(self.decoder.decode_single_token_to_bytes(token)).into_py()?;
+        Ok(PyBytes::new(py, &bytes))
+    }
+
     fn __repr__(&self) -> PyResult<String> {
         crate::utils::serde_pyo3::repr(self)
             .map_err(|e| exceptions::PyException::new_err(e.to_string()))
