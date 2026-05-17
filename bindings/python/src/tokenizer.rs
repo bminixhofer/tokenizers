@@ -889,8 +889,8 @@ impl PyTokenizer {
     ///     :obj:`Dict[int, bytes]`: A mapping from token ID to raw bytes
     #[pyo3(signature = (with_added_tokens = true) -> "dict[int, bytes]")]
     #[pyo3(text_signature = "(self, with_added_tokens=True)")]
-    fn get_vocab_bytes(&self, with_added_tokens: bool) -> HashMap<u32, Vec<u8>> {
-        self.tokenizer.get_vocab_bytes(with_added_tokens)
+    fn get_vocab_bytes(&self, with_added_tokens: bool) -> PyResult<HashMap<u32, Vec<u8>>> {
+        Ok(self.read_inner()?.get_vocab_bytes(with_added_tokens))
     }
 
     /// Get the underlying vocabulary
@@ -1673,7 +1673,7 @@ impl PyTokenizer {
     ///     :obj:`bytes`: The raw bytes corresponding to the token
     #[pyo3(signature = (id) -> "bytes", text_signature = "(self, id)")]
     fn id_to_bytes(&self, id: u32) -> PyResult<Vec<u8>> {
-        self.tokenizer.id_to_bytes(id).map_err(|e| {
+        self.read_inner()?.id_to_bytes(id).map_err(|e| {
             exceptions::PyValueError::new_err(e.to_string())
         })
     }
