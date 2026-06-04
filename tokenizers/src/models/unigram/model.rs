@@ -163,6 +163,10 @@ impl Unigram {
     pub fn byte_fallback(&self) -> bool {
         self.byte_fallback
     }
+
+    pub fn get_unk_id(&self) -> Option<usize> {
+        self.unk_id
+    }
     pub(super) fn len(&self) -> usize {
         self.vocab.len()
     }

@@ -169,15 +169,18 @@ impl Decoder for DecoderWrapper {
     fn decode_single_token_to_bytes(&self, token: &str) -> Result<Vec<u8>> {
         match self {
             Self::ByteLevel(_) => {
-                // Each char in a byte-level token maps to one byte via CHAR_BYTES
-                token
-                    .chars()
-                    .map(|c| {
-                        CHAR_BYTES.get(&c).copied().ok_or_else(|| {
-                            format!("unexpected char '{}' in byte-level token", c).into()
-                        })
+                // Match ByteLevel::decode_chain for a single token: if every
+                // char is in the byte-level alphabet, map chars to bytes;
+                // otherwise the whole token is treated as literal UTF-8.
+                match token.chars().try_fold(Vec::new(), |mut acc, c| {
+                    CHAR_BYTES.get(&c).map(|b| {
+                        acc.push(*b);
+                        acc
                     })
-                    .collect()
+                }) {
+                    Some(bytes) => Ok(bytes),
+                    None => Ok(token.as_bytes().to_vec()),
+                }
             }
             Self::ByteFallback(_) => {
                 // <0xHH> → single byte; otherwise UTF-8 bytes of the token string

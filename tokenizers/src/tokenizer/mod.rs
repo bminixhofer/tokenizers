@@ -729,22 +729,10 @@ where
     /// pipeline. This bypasses the lossy `String` conversion that happens in `decode`, so
     /// partial UTF-8 bytes (e.g. from ByteLevel or ByteFallback decoders) are preserved.
     pub fn id_to_bytes(&self, id: u32) -> Result<Vec<u8>> {
-        // Added tokens are plain strings — their `content` is the literal surface form and
-        // should NOT go through the decoder. This holds even when an added token shares an
-        // ID with a model vocab entry (e.g. `<|endoftext|>` in GPT-2): the model's
-        // `id_to_token` may return an internally-encoded form (byte-level, etc.) that
-        // differs from the intended surface string, and `decode_single_token_to_bytes`
-        // can error on characters outside the decoder's expected alphabet.
-        // NOTE: we ignore normalized=False / normalized=True on AddedTokens here.
-        if let Some(token) = self.added_vocabulary.simple_id_to_token(id) {
-            return Ok(token.into_bytes());
-        }
-        // Model-only tokens are stored in the decoder's expected encoding (e.g.
-        // byte-encoded for ByteLevel), so they must go through the decoder to recover
-        // the raw bytes.
         let token = self
-            .model
-            .id_to_token(id)
+            .added_vocabulary
+            .simple_id_to_token(id)
+            .or_else(|| self.model.id_to_token(id))
             .ok_or_else(|| format!("Token ID {} not found in vocabulary", id))?;
         if let Some(decoder) = &self.decoder {
             decoder.decode_single_token_to_bytes(&token)
@@ -762,6 +750,37 @@ where
             .into_iter()
             .filter_map(|(_, id)| self.id_to_bytes(id).ok().map(|bytes| (id, bytes)))
             .collect()
+    }
+
+    /// Apply added-token extraction, normalization, pre-tokenization, and
+    /// per-token decoding, returning the byte stream that token spans align to.
+    pub fn normalized_bytes(&self, sequence: &str) -> Result<Vec<u8>>
+    where
+        N: Normalizer,
+        PT: PreTokenizer,
+        D: Decoder,
+    {
+        let pretokenized = self
+            .added_vocabulary
+            .extract_and_normalize(self.normalizer.as_ref(), sequence);
+        let pretokenized = self.do_pre_tokenize(pretokenized)?;
+        let mut out = Vec::new();
+
+        for (piece, _, tokens) in
+            pretokenized.get_splits(OffsetReferential::Normalized, OffsetType::Byte)
+        {
+            if let Some(tokens) = tokens {
+                for token in tokens {
+                    out.extend(self.id_to_bytes(token.id)?);
+                }
+            } else if let Some(decoder) = &self.decoder {
+                out.extend(decoder.decode_single_token_to_bytes(piece)?);
+            } else {
+                out.extend(piece.as_bytes());
+            }
+        }
+
+        Ok(out)
     }
 
     /// set the added vocab's splitting scheme
@@ -1800,6 +1819,61 @@ mod tests {
             full_a.get_ids(),
             "OnlySecond should not truncate the first sequence"
         );
+    }
+
+    #[test]
+    fn id_to_bytes_added_tokens_respect_normalized_flag() {
+        // Repro of a Gemma-style setup: the non-special added token whose `content`
+        // is the metaspace-encoded form (e.g. "▁▁▁") must go through the decoder
+        // so we get the surface bytes ("   ") — not the raw 3×U+2581 bytes.
+        use crate::decoders::byte_fallback::ByteFallback;
+        use crate::decoders::fuse::Fuse;
+        use crate::decoders::sequence::Sequence;
+        use crate::decoders::DecoderWrapper;
+        use crate::normalizers::replace::Replace;
+
+        let mut tok = test_tokenizer();
+        let decoder = DecoderWrapper::Sequence(Sequence::new(vec![
+            DecoderWrapper::Replace(Replace::new("▁", " ").unwrap()),
+            DecoderWrapper::ByteFallback(ByteFallback::default()),
+            DecoderWrapper::Fuse(Fuse::default()),
+        ]));
+        tok.with_decoder(Some(decoder));
+
+        // normalized=true added token whose content is the decoder-input form.
+        tok.add_tokens(vec![AddedToken::from("▁▁▁".to_string(), false).normalized(true)])
+            .unwrap();
+        let id = tok.token_to_id("▁▁▁").unwrap();
+        let bytes = tok.id_to_bytes(id).unwrap();
+        assert_eq!(
+            bytes,
+            b"   ",
+            "normalized=true added token must be decoded (got {:?})",
+            std::str::from_utf8(&bytes).unwrap_or("<non-utf8>")
+        );
+
+        // id_to_bytes follows decode semantics: normalized=false affects
+        // encoding-time matching, but decoding still runs the selected token
+        // string through the decoder.
+        tok.add_tokens(vec![AddedToken::from("▁raw".to_string(), false).normalized(false)])
+            .unwrap();
+        let raw_id = tok.token_to_id("▁raw").unwrap();
+        assert_eq!(tok.id_to_bytes(raw_id).unwrap(), b" raw");
+
+        tok.add_special_tokens(vec![AddedToken::from("▁pad".to_string(), true)])
+            .unwrap();
+        let pad_id = tok.token_to_id("▁pad").unwrap();
+        assert_eq!(tok.id_to_bytes(pad_id).unwrap(), b" pad");
+
+        // Phi-2-style normalized=true added whitespace tokens are literal
+        // normalized text, not byte-level alphabet text. ByteLevel cannot decode
+        // raw spaces, so added tokens must fall back to their literal bytes.
+        use crate::pre_tokenizers::byte_level::ByteLevel;
+        tok.with_decoder(Some(DecoderWrapper::ByteLevel(ByteLevel::default())));
+        tok.add_tokens(vec![AddedToken::from("   ".to_string(), false).normalized(true)])
+            .unwrap();
+        let spaces_id = tok.token_to_id("   ").unwrap();
+        assert_eq!(tok.id_to_bytes(spaces_id).unwrap(), b"   ");
     }
 
     #[test]

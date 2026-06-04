@@ -367,6 +367,19 @@ impl PyBPE {
         getter!(self_, BPE, unk_token.clone())
     }
 
+    #[getter]
+    fn get_unk_id(self_: PyRef<Self>) -> Option<u32> {
+        let super_ = self_.as_ref();
+        let model = super_.model.read().unwrap();
+        if let ModelWrapper::BPE(ref mo) = *model {
+            mo.get_unk_token()
+                .as_ref()
+                .and_then(|unk_token| mo.token_to_id(unk_token))
+        } else {
+            unreachable!()
+        }
+    }
+
     #[setter]
     fn set_unk_token(self_: PyRef<Self>, unk_token: Option<String>) {
         setter!(self_, BPE, unk_token, unk_token);
@@ -626,6 +639,17 @@ impl PyWordPiece {
         getter!(self_, WordPiece, unk_token.clone())
     }
 
+    #[getter]
+    fn get_unk_id(self_: PyRef<Self>) -> Option<u32> {
+        let super_ = self_.as_ref();
+        let model = super_.model.read().unwrap();
+        if let ModelWrapper::WordPiece(ref mo) = *model {
+            mo.token_to_id(&mo.unk_token)
+        } else {
+            unreachable!()
+        }
+    }
+
     #[setter]
     fn set_unk_token(self_: PyRef<Self>, unk_token: String) {
         setter!(self_, WordPiece, unk_token, unk_token);
@@ -772,6 +796,17 @@ impl PyWordLevel {
         getter!(self_, WordLevel, unk_token.clone())
     }
 
+    #[getter]
+    fn get_unk_id(self_: PyRef<Self>) -> Option<u32> {
+        let super_ = self_.as_ref();
+        let model = super_.model.read().unwrap();
+        if let ModelWrapper::WordLevel(ref mo) = *model {
+            mo.token_to_id(&mo.unk_token)
+        } else {
+            unreachable!()
+        }
+    }
+
     #[setter]
     fn set_unk_token(self_: PyRef<Self>, unk_token: String) {
         setter!(self_, WordLevel, unk_token, unk_token);
@@ -913,6 +948,11 @@ impl PyUnigram {
     #[getter]
     fn get_alpha(self_: PyRef<Self>) -> Option<f64> {
         getter!(self_, Unigram, alpha)
+    }
+
+    #[getter]
+    fn get_unk_id(self_: PyRef<Self>) -> Option<u32> {
+        getter!(self_, Unigram, get_unk_id()).map(|unk_id| unk_id as u32)
     }
 
     #[setter]

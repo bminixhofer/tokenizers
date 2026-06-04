@@ -893,6 +893,23 @@ impl PyTokenizer {
         Ok(self.read_inner()?.get_vocab_bytes(with_added_tokens))
     }
 
+    /// Apply added-token extraction, normalization, pre-tokenization, and
+    /// per-token decoding, returning the byte stream used for token-span
+    /// alignment.
+    ///
+    /// Args:
+    ///     sequence (:obj:`str`):
+    ///         The input sequence.
+    ///
+    /// Returns:
+    ///     :obj:`bytes`: The normalized byte stream.
+    #[pyo3(signature = (sequence) -> "bytes", text_signature = "(self, sequence)")]
+    fn normalized_bytes(&self, sequence: &str) -> PyResult<Vec<u8>> {
+        self.read_inner()?.normalized_bytes(sequence).map_err(|e| {
+            exceptions::PyValueError::new_err(e.to_string())
+        })
+    }
+
     /// Get the underlying vocabulary
     ///
     /// Returns:
